@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Embed the web app into the firmware.
 
-Reads webapp/index.html, webapp/app.js, webapp/arthash.js and webapp/style.css, gzips every file
+Reads webapp/index.html, webapp/app.js, webapp/arthash.js, webapp/carddetect.js and webapp/style.css, gzips every file
 and writes firmware/include/web_assets.h: one PROGMEM byte array per file, its
 length, and a table that maps served paths to MIME types.
 
@@ -25,6 +25,7 @@ ASSETS = [
     ("index.html", ("/", "/index.html"), "text/html; charset=utf-8", "WEB_INDEX_HTML"),
     ("app.js", ("/app.js",), "application/javascript; charset=utf-8", "WEB_APP_JS"),
     ("arthash.js", ("/arthash.js",), "application/javascript; charset=utf-8", "WEB_ARTHASH_JS"),
+    ("carddetect.js", ("/carddetect.js",), "application/javascript; charset=utf-8", "WEB_CARDDETECT_JS"),
     ("style.css", ("/style.css",), "text/css; charset=utf-8", "WEB_STYLE_CSS"),
 ]
 
@@ -41,6 +42,7 @@ PLACEHOLDERS = {
     ),
     "app.js": "// placeholder: webapp/app.js was not available at build time\n",
     "arthash.js": "// placeholder: webapp/arthash.js was not available at build time\n",
+    "carddetect.js": "// placeholder: webapp/carddetect.js was not available at build time\n",
     "style.css": "/* placeholder: webapp/style.css was not available at build time */\n",
 }
 

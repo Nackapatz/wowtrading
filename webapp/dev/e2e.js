@@ -143,12 +143,10 @@ async function main() {
   });
 
   /* ---------- Stabilitätsregel und Sperre ---------- */
-  await check('Stabilität: 1 Frame erfasst nicht, 2 gleiche Frames erfassen genau einmal (Set-Wort + Nummer)', async () => {
+  await check('Standbild: ein eindeutiges Bild erfasst sofort (Set-Wort + Nummer), danach gesperrt', async () => {
     const before = await scanCount();
     await frame('BETA 2/20');
-    assert.equal(await scanCount(), before, 'nach 1 Frame keine Erfassung');
-    await frame('BETA 2/20');
-    assert.equal(await scanCount(), before + 1, 'nach 2 Frames eine Erfassung');
+    assert.equal(await scanCount(), before + 1, 'eindeutig: ein Standbild genügt');
     await frame('BETA 2/20');
     await frame('BETA 2/20');
     assert.equal(await scanCount(), before + 1, 'Duplikat unterdrückt, solange dieselbe Karte liegt');
@@ -161,14 +159,10 @@ async function main() {
     assert.equal(rec.rarity, 'R');
     assert.deepEqual(rec.matchInfo, { signals: ['Nr', 'Ges'], score: 70, lead: 70 });
   });
-  await check('Stabilität: Kartenwechsel nach 2 Frames ohne dieselbe Karte, dann neue Erfassung', async () => {
+  await check('Kartenwechsel: andere Karte wird sofort erfasst', async () => {
     const before = await scanCount();
     await frame('ALPHA 3/20');
-    await frame('ALPHA 3/20');
-    assert.equal(await scanCount(), before, 'nach 2 fremden Frames noch keine Erfassung (erst Entsperren)');
-    await frame('ALPHA 3/20');
-    await frame('ALPHA 3/20');
-    assert.equal(await scanCount(), before + 1, 'andere Karte nach Wechsel erfasst');
+    assert.equal(await scanCount(), before + 1, 'andere Karte erfasst');
     assert.equal((await lastRec()).productId, 900003);
     assert.equal((await lastRec()).number, '3/20');
   });
@@ -221,7 +215,6 @@ async function main() {
     assert.equal(await page.evaluate(() => localStorage.getItem('wowscan.setFilter')), '"SAMPLE Set Alpha"');
     assert.match(await page.textContent('#dataInfo'), /Set-Filter: SAMPLE Set Alpha/);
     const before = await scanCount();
-    await frame({ image: '/sample-data/img/900001.png' });
     await frame({ image: '/sample-data/img/900001.png' });
     assert.equal(await scanCount(), before + 1);
     assert.equal((await lastRec()).productId, 900001);
@@ -276,18 +269,16 @@ async function main() {
       assert.ok(r.ms < 30, 'Zeit ' + r.ms);
     }
   });
-  await check('Bild: 2 gleiche Frames erfassen genau einmal', async () => {
+  await check('Bild: ein eindeutiges Standbild erfasst sofort, danach gesperrt', async () => {
     await unlock();
     const before = await scanCount();
     await testImage(900003);
-    assert.equal(await scanCount(), before, '1 Frame erfasst nicht');
-    await testImage(900003);
-    assert.equal(await scanCount(), before + 1);
+    assert.equal(await scanCount(), before + 1, 'eindeutig: ein Standbild genügt');
     const rec = await lastRec();
     assert.equal(rec.productId, 900003);
     assert.ok(rec.ocr == null, 'keine OCR-Konfidenz bei Bildtreffer');
     await testImage(900003);
-    assert.equal(await scanCount(), before + 1, 'gesperrt');
+    assert.equal(await scanCount(), before + 1, 'gesperrt, solange die Karte liegt');
   });
   await check('Bild: Abweichungen (Helligkeit, Unschärfe, Versatz, Skalierung) werden toleriert', async () => {
     const cases = [{ filter: 'brightness(1.2)' }, { filter: 'brightness(0.8) contrast(1.1)' }, { filter: 'blur(1.5px)' }, { shift: 6 }, { scale: 0.97 }, { filter: 'saturate(0.7) blur(1px)', shift: -4, scale: 1.02 }];
@@ -318,7 +309,6 @@ async function main() {
     await page.evaluate(() => window.__wow.setFilter('SAMPLE Set Beta'));
     const before = await scanCount();
     await testImage(900001);
-    await testImage(900001);
     assert.equal(await scanCount(), before + 1);
     assert.equal((await lastRec()).productId, 900016);
     await page.evaluate(() => window.__wow.setFilter(''));
@@ -345,7 +335,7 @@ async function main() {
     await tab(page, 'set');
     await setRange(page, '#calImgS', 40);
     assert.equal(await page.textContent('#calImgV'), '40');
-    assert.equal((await page.evaluate(() => JSON.parse(localStorage.getItem('wowscan.calib')))).imgMax, 40);
+    assert.equal((await page.evaluate(() => JSON.parse(localStorage.getItem('wowscan.calib2')))).imgMax, 40);
     assert.equal((await page.evaluate(() => window.__wow.artState())).imgMax, 40);
     await tab(page, 'scan');
     const r = await testImage(900005, { filter: 'blur(3px) brightness(1.3)', feed: false });
@@ -359,6 +349,17 @@ async function main() {
     await tab(page, 'scan');
   });
 
+  await check('Kalibrierung: Schärfe-Grenze wird gespeichert (wowscan.calib2), Standard 60', async () => {
+    await tab(page, 'set');
+    assert.equal(await page.inputValue('#calSharpS'), '60');
+    await setRange(page, '#calSharpS', 90);
+    assert.equal(await page.textContent('#calSharpV'), '90');
+    assert.equal((await page.evaluate(() => JSON.parse(localStorage.getItem('wowscan.calib2')))).sharpMin, 90);
+    await page.click('#calReset');
+    assert.equal(await page.inputValue('#calSharpS'), '60');
+    await tab(page, 'scan');
+  });
+
   /* ---------- Kombinierte Erkennung (docs/CARD_ID.md) ---------- */
   const HULOK = { strip: 'BETRAYER 163/264', cost: '2', atk: '2', hp: '2', name: 'Hulok Wegbereiter' };
   await check('Kombiniert: Set+Nummer exakt + Werte + deutscher Name → Erfassung mit allen Feldern, Name gelernt', async () => {
@@ -369,8 +370,7 @@ async function main() {
     assert.equal(r.cand[0].pts, 100, r.cand[0].sig);   // 60 + 10 + 3·10
     assert.equal(r.cand[1].k, 'p900032', 'Variante (LOOT) gleich gut, Grundprodukt gewählt');
     assert.equal(r.sure, true);
-    await frame(HULOK);
-    assert.equal(await scanCount(), before + 1);
+    assert.equal(await scanCount(), before + 1, 'eindeutig: ein Standbild erfasst');
     const rec = await lastRec();
     assert.equal(rec.key, 'sotb-163');
     assert.equal(rec.productId, 900031);
@@ -436,9 +436,7 @@ async function main() {
     assert.equal(r.lead, 20);
     assert.equal(r.sure, true);
     await frame(misread);
-    assert.equal(await scanCount(), before);
-    await frame(misread);
-    assert.equal(await scanCount(), before + 1);
+    assert.equal(await scanCount(), before + 1, 'eindeutig: ein Standbild');
     assert.equal((await lastRec()).key, 'sotb-163');
   });
   await check('Kombiniert: gelernter deutscher Name (+40) löst den Nummern-Lesefehler', async () => {
@@ -451,8 +449,9 @@ async function main() {
     assert.match(r.cand[0].sig, /DE/);
     assert.equal(r.sure, true);
     await frame(f);
-    await frame(f);
     assert.equal(await scanCount(), before + 1);
+    await frame(f);
+    assert.equal(await scanCount(), before + 1, 'gesperrt, solange die Karte liegt');
     assert.equal((await lastRec()).key, 'sotb-163');
     assert.equal(Object.keys(await page.evaluate(() => window.__wow.learned())).length, 1, 'unscharf erkannter Name wird nicht doppelt gelernt');
   });
@@ -475,14 +474,12 @@ async function main() {
     await unlock();
     const before = await scanCount();
     await frame('153/264');
-    await frame('153/264');
     assert.equal(await scanCount(), before + 1);
     assert.equal((await lastRec()).name, 'Roke the Ice Baron');
   });
   await check('Kombiniert: Karte ohne TCGplayer-Produkt wird erkannt und mit „kein Preis“ gespeichert', async () => {
     await unlock();
     const before = await scanCount();
-    await frame('BETRAYER 200/264');
     await frame('BETRAYER 200/264');
     assert.equal(await scanCount(), before + 1);
     const rec = await lastRec();
@@ -524,14 +521,13 @@ async function main() {
     assert.equal(r.sure, true);
     await unlock();
     const before = await scanCount();
-    for (let i = 0; i < 2; i++) await frame({ name: 'Roke der Eisbaron', cost: '2', atk: '2', hp: '1' });
+    await frame({ name: 'Roke der Eisbaron', cost: '2', atk: '2', hp: '1' });
     assert.equal(await scanCount(), before + 1, 'gelernter Name + Werte erfassen');
     assert.equal((await lastRec()).key, 'sotb-153');
   });
   await check('Namenszusatz: "Sample Lucky Longshot" erfasst die (LOOT)-Karte, voller Name angezeigt', async () => {
     await unlock();
     const before = await scanCount();
-    await frame('LOOT 1/12');
     await frame('LOOT 1/12');
     assert.equal(await scanCount(), before + 1);
     const rec = await lastRec();
@@ -764,8 +760,8 @@ async function main() {
     assert.equal(st.ui.cond, 'LP');
   });
   await check('Einstellungen wirken: neue Erfassung in CHF, Preis Tiefstpreis', async () => {
-    // Vorherige Karte (Ember Warden) ist noch gesperrt: 1. Frame zählt als fremd, 2. entsperrt, 3. erfasst
-    for (let i = 0; i < 3; i++) await page.evaluate(() => window.__wow.frame({ strip: 'BETA 4/20' }));
+    // Vorherige Karte ist noch gesperrt; eine andere Karte wird im ersten Standbild erfasst
+    await page.evaluate(() => window.__wow.frame({ strip: 'BETA 4/20' }));
     const rec = (await api('GET', '/api/scans')).body.at(-1);
     assert.equal(rec.name, 'Sample Sun Hermit');
     assert.equal(rec.currency, 'CHF');
@@ -800,11 +796,14 @@ async function main() {
     await page.waitForSelector('#banner .banner.warn', { timeout: 8000 });
     assert.match(await page.textContent('#banner'), /Texterkennung nicht verfügbar.*Bildabgleich läuft weiter/);
     assert.equal(await page.textContent('#btnScan'), 'Scan stoppen');
+    assert.equal(await page.isEnabled('#btnShot'), true, '„Foto auswerten“ aktiv während des Scans');
+    assert.equal(await page.evaluate(() => document.querySelector('#quad').hasAttribute('hidden')), true, 'ohne Karte kein Polygon');
     await page.waitForTimeout(300);
     await page.screenshot({ path: path.join(SHOTS, '05-camera.png') });
     await page.click('#btnScan');
     await page.waitForTimeout(200);
     assert.equal(await page.textContent('#btnScan'), 'Scan starten');
+    assert.equal(await page.isDisabled('#btnShot'), true, '„Foto auswerten“ aus, wenn die Kamera aus ist');
     assert.equal(await page.isHidden('#video'), true);
     assert.deepEqual(page.errors, []);
   });
@@ -813,11 +812,11 @@ async function main() {
     await tab(page, 'set');
     await page.selectOption('#calReg', 'name');
     await setRange(page, '#calYS', 5);
-    const v = await page.evaluate(() => JSON.parse(localStorage.getItem('wowscan.calib')));
+    const v = await page.evaluate(() => JSON.parse(localStorage.getItem('wowscan.calib2')));
     assert.deepEqual(v.off.name, [0, 5]);
     await page.selectOption('#calReg', 'hp');
     await setRange(page, '#calXS', -3);
-    assert.deepEqual((await page.evaluate(() => JSON.parse(localStorage.getItem('wowscan.calib')))).off.hp, [-3, 0]);
+    assert.deepEqual((await page.evaluate(() => JSON.parse(localStorage.getItem('wowscan.calib2')))).off.hp, [-3, 0]);
     assert.equal(await page.textContent('#calXV'), '-3');
     await page.check('#calDbg');
     await tab(page, 'scan');
@@ -855,13 +854,14 @@ async function main() {
     await tab(page, 'set');
     await page.click('#calReset');
     assert.equal(await page.inputValue('#calYS'), '0');
-    assert.deepEqual((await page.evaluate(() => JSON.parse(localStorage.getItem('wowscan.calib')))).off.hp, [0, 0]);
+    assert.deepEqual((await page.evaluate(() => JSON.parse(localStorage.getItem('wowscan.calib2')))).off.hp, [0, 0]);
   });
 
 
-  /* ---------- Fake-Kamera mit Kartenbild (Y4M) ---------- */
-  await check('Kamera mit Kartenbild: Bildabgleich erfasst die Karte im Rahmen', async () => {
-    const y4m = path.join(__dirname, 'sample-data', 'camera.y4m');
+  /* ---------- Fake-Kamera mit Kartenbild (Y4M): Erkennung, Polygon, Foto ---------- */
+  // camera.y4m: Karte im Overlay-Rahmen. camera-offset.y4m: kleiner, versetzt, um 4° gedreht, texturierter Hintergrund.
+  const camCase = (file, pid, label, shotName) => check(`Kamera (${label}): Karte erkannt, Polygon sichtbar, über ein Foto erfasst`, async () => {
+    const y4m = path.join(__dirname, 'sample-data', file);
     const b2 = await chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--use-file-for-fake-video-capture=' + y4m] });
     try {
       const c2 = await b2.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, permissions: ['camera'] });
@@ -871,18 +871,92 @@ async function main() {
       const before = await scanCount();
       await p.click('#btnScan');
       await p.waitForFunction(() => document.querySelector('#video').videoWidth > 0, null, { timeout: 8000 });
+      // Erkennung: grünes Viereck mit vier Ecken über dem Video, innerhalb des Kamerabilds
+      await p.waitForFunction(() => { const q = document.querySelector('#quad'); return !q.hasAttribute('hidden') && q.querySelector('polygon').getAttribute('points').split(' ').length === 4; }, null, { timeout: 8000 });
+      assert.equal(await p.isVisible('#quad'), true);
+      const box = await p.evaluate(() => {
+        const r = document.querySelector('#quad polygon').getBoundingClientRect(), c = document.querySelector('#cam').getBoundingClientRect();
+        return { x: r.left - c.left, y: r.top - c.top, w: r.width, h: r.height, cw: c.width, ch: c.height };
+      });
+      assert.ok(box.x >= 0 && box.y >= 0 && box.x + box.w <= box.cw && box.y + box.h <= box.ch, 'Polygon im Kamerabild: ' + JSON.stringify(box));
+      assert.ok(box.w > 100 && box.h > 150, 'Polygon-Größe: ' + JSON.stringify(box));
+      // Foto: Erfassung über den Standbild-Pfad (Bildabgleich), Schärfe ausreichend
       const deadline = Date.now() + 10000;
       while (Date.now() < deadline && (await scanCount()) === before) await p.waitForTimeout(250);
       assert.equal(await scanCount(), before + 1, 'keine Erfassung über die Kamera');
-      assert.equal((await lastRec()).productId, 900003);
-      await p.waitForTimeout(300);
-      assert.match(await p.textContent('#live'), /Sample Frost Oracle/);
-      await p.screenshot({ path: path.join(SHOTS, '09-camera-card.png') });
+      const rec = await lastRec();
+      assert.equal(rec.productId, pid);
+      assert.ok(rec.matchInfo.signals.includes('Bild'), 'Erfassung über das Bild: ' + rec.matchInfo.signals);
+      assert.match(await p.textContent('#live'), /Erfasst: /);
+      assert.ok((await p.evaluate(() => window.__wow.state().sharp)) >= 60, 'Schärfe des Fotos');
+      await p.screenshot({ path: path.join(SHOTS, shotName) });
+      // Karte bleibt im Bild: gesperrt (wait-remove), keine Doppelerfassung
       await p.waitForTimeout(1200);
       assert.equal(await scanCount(), before + 1, 'Karte bleibt im Bild → gesperrt, keine Doppelerfassung');
+      assert.equal(await p.evaluate(() => window.__wow.state().cardState), 'wait-remove');
+      // Auslöser von Hand: „Foto auswerten“ wertet die Karte erneut aus
+      await p.click('#btnShot');
+      const d2 = Date.now() + 8000;
+      while (Date.now() < d2 && (await scanCount()) === before + 1) await p.waitForTimeout(250);
+      assert.equal(await scanCount(), before + 2, 'Foto auswerten erfasst');
+      const dup = await lastRec();
+      await api('DELETE', `/api/scans?id=${dup.id}`);   // Testdublette wieder entfernen
       await p.click('#btnScan');
       assert.deepEqual(p.errors, []);
     } finally { await b2.close(); }
+  });
+  await camCase('camera.y4m', 900003, 'Karte im Rahmen', '09-camera-card.png');
+  await camCase('camera-offset.y4m', 900005, 'versetzt, gedreht', '11-camera-offset.png');
+  await check('Kamera (unbekannte Karte): Standbilder werden zusammengeführt, kein Treffer, gesperrt', async () => {
+    const b4 = await chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--use-file-for-fake-video-capture=' + path.join(__dirname, 'sample-data', 'camera-unknown.y4m')] });
+    try {
+      const c4 = await b4.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, permissions: ['camera'] });
+      await c4.route('https://cdn.jsdelivr.net/**', (r) => r.abort());
+      const p = await openApp(c4);
+      const before = await scanCount();
+      await p.click('#btnScan');
+      // Karte gefunden, Foto gemacht (Schärfe-Wert liegt vor), kein Treffer
+      await p.waitForFunction(() => /Nicht erkannt/.test(document.querySelector('#live').textContent), null, { timeout: 10000 });
+      await p.waitForTimeout(1000);
+      assert.equal(await scanCount(), before, 'unbekannte Karte wird nicht erfasst');
+      assert.equal(await p.evaluate(() => window.__wow.state().cardState), 'wait-remove', 'gesperrt, bis die Karte weg ist');
+      assert.ok((await p.evaluate(() => window.__wow.state().sharp)) >= 60, 'Foto wurde geschärft geprüft');
+      assert.equal(await p.isHidden('#suggest'), true, 'keine Vorschläge');
+      await p.click('#btnScan');
+      assert.deepEqual(p.errors, []);
+    } finally { await b4.close(); }
+  });
+  await check('Standbilder zusammenführen: erster passender Rohtext je Feld, sonst der häufigste', async () => {
+    const r = await page.evaluate(() => window.__wow.mergeRaw([
+      { strip: 'BETRAYER 15 3/264', cost: '7' }, { strip: 'BETRAYER 163/264', cost: '2', atk: '2', hp: '2' }, { strip: 'BETRAYER 163/264', cost: '2', atk: '9', hp: '2' },
+    ], ['sotb-163']));
+    assert.equal(r.strip, 'BETRAYER 163/264', 'erster Wert, der zur Karte passt');
+    assert.equal(r.cost, '2', '„7“ passt nicht zur Karte');
+    assert.equal(r.atk, '2', 'erster passender Wert vor „9“');
+    assert.equal(r.hp, '2');
+    const h = await page.evaluate(() => window.__wow.mergeRaw([{ cost: '5' }, { cost: '6' }, { cost: '6' }], []));
+    assert.equal(h.cost, '6', 'ohne Passung: häufigster Wert');
+    assert.equal(h.name, '');
+  });
+  await check('Kamera: Schärfe-Grenze über der Schärfe des Fotos → Foto wird verworfen, keine Erfassung', async () => {
+    const b3 = await chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--use-file-for-fake-video-capture=' + path.join(__dirname, 'sample-data', 'camera.y4m')] });
+    try {
+      const c3 = await b3.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, permissions: ['camera'] });
+      await c3.route('https://cdn.jsdelivr.net/**', (r) => r.abort());
+      const p = await newPage(c3);
+      await p.setViewportSize({ width: 390, height: 844 });
+      await p.addInitScript(() => localStorage.setItem('wowscan.calib2', JSON.stringify({ sharpMin: 200 })));
+      await p.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'domcontentloaded' });
+      await p.evaluate(() => window.__wow.ready);
+      const before = await scanCount();
+      await p.click('#btnScan');
+      await p.waitForFunction(() => /Unscharf/.test(document.querySelector('#live').textContent), null, { timeout: 8000 });
+      await p.waitForTimeout(800);
+      assert.equal(await scanCount(), before, 'unscharfes Foto erfasst');
+      assert.ok((await p.evaluate(() => window.__wow.state().sharp)) < 200, 'Schärfe liegt unter der Grenze');
+      assert.equal(await p.evaluate(() => window.__wow.state().cardState), 'steady', 'zurück auf Ruhig');
+      await p.click('#btnScan');
+    } finally { await b3.close(); }
   });
 
   /* ---------- Layout bei 390 px ---------- */
@@ -969,6 +1043,7 @@ async function main() {
     await c7.route('https://cdn.jsdelivr.net/**', (r) => r.abort());
     const p = await openApp(c7);
     assert.match(await p.textContent('#dataInfo'), /26 Karten/);
+    assert.match(await p.textContent('#dataInfo'), /Set\+Nummer noch nicht verfügbar \(Kartendatenbank fehlt\)/);
     assert.equal((await p.evaluate(() => window.__wow.state())).indexed, 26);
     const img = await p.evaluate(() => window.__wow.testImage('/sample-data/img/900003.png', { feed: false }));
     assert.equal(img.ok, true);

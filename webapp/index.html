@@ -27,12 +27,16 @@
       <video id="video" playsinline muted hidden></video>
       <div id="guide" class="guide" aria-hidden="true" hidden></div>
       <div id="boxArt" class="cal-box art" aria-hidden="true" hidden><span>Bild</span></div>
+      <svg id="quad" class="quad" aria-hidden="true" hidden><polygon points=""></polygon></svg>
       <div id="camMsg" class="cam-msg">Kamera aus. Tippe auf „Scan starten“, um die Kartenerkennung zu starten.</div>
       <div id="live" class="live" aria-live="polite"></div>
     </div>
 
+    <button id="btnShot" class="btn big" type="button" disabled>Foto auswerten</button>
+
     <div id="dbg" class="dbg" hidden>
-      <p class="meta">Debug: Illustration (Bildabgleich) und OCR-Bereiche mit Rohtext</p>
+      <p class="meta">Debug: entzerrte Karte, Illustration (Bildabgleich) und OCR-Bereiche mit Rohtext</p>
+      <canvas id="cvCard" width="10" height="10" aria-label="Entzerrte Karte"></canvas>
       <canvas id="cvArt" width="10" height="10" aria-label="Ausschnitt Illustration"></canvas>
       <div id="dbgReg" class="dbg-reg"></div>
       <pre id="dbgTxt" class="dbg-txt"></pre>
@@ -137,6 +141,8 @@
         <input id="calYS" type="range" min="-10" max="10" step="1" value="0"></label>
       <label class="field"><span>Bild-Toleranz (max. Abstand) <output id="calImgV">70</output></span>
         <input id="calImgS" type="range" min="40" max="110" step="2" value="70"></label>
+      <label class="field"><span>Schärfe-Grenze (Foto wird ab hier verworfen) <output id="calSharpV">60</output></span>
+        <input id="calSharpS" type="range" min="10" max="200" step="5" value="60"></label>
       <label class="switch"><input type="checkbox" id="calDbg"><span>Debug-Ansicht unter der Kamera</span></label>
       <div class="actions"><button id="calReset" class="btn" type="button">Kalibrierung zurücksetzen</button></div>
     </section>
@@ -185,6 +191,7 @@
 
 <noscript><p class="banner err">Diese Seite braucht JavaScript.</p></noscript>
 <script src="arthash.js"></script>
+<script src="carddetect.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

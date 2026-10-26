@@ -99,6 +99,7 @@ strong { color: var(--text); }
 .dbg { display: flex; flex-direction: column; gap: 6px; }
 .dbg canvas { width: 100%; height: auto; display: block; background: #000; border: 1px solid var(--border); border-radius: 6px; }
 .dbg #cvArt { width: 50%; max-width: 200px; image-rendering: pixelated; }
+.dbg #cvCard { width: 50%; max-width: 200px; }
 .dbg-reg { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
 .dbg-reg figure { margin: 0; min-width: 0; }
 .dbg-reg .wide { grid-column: 1 / -1; }
@@ -108,6 +109,9 @@ strong { color: var(--text); }
   font: .82rem/1.4 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .cal { display: flex; flex-direction: column; gap: 10px; }
+.quad { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.quad[hidden] { display: none; }
+.quad polygon { fill: rgba(61, 220, 132, .12); stroke: #3ddc84; stroke-width: 3; stroke-linejoin: round; }
 .cam-msg { padding: 20px; text-align: center; color: var(--muted); position: relative; }
 .cam-msg.err { color: #f3b1ab; }
 .live {
