@@ -68,21 +68,28 @@ function cardLuma(u, v) {
 // Hintergrund: Grundhelligkeit, Textur (Wellen) und Rauschen; 'noise' = weißes Rauschen
 function bgLuma(kind, x, y, rnd) {
   if (kind === 'noise') return rnd() % 256;
-  const base = { mid: 140, light: 225, dark: 70 }[kind];
+  if (kind === 'carpet') return 110 + 10 * Math.sin(x / 4) * Math.cos(y / 5) + (rnd() % 61 - 30);   // Teppich: ±30
+  const base = { mid: 140, light: 225, dark: 70, dark40: 40 }[kind];
   return base + 10 * Math.sin(x / 6) * Math.cos(y / 7) + (rnd() % 9 - 4);
 }
 
-function render(quad, bg, seed = 7) {
-  const Hm = homography(quad, [[0, 0], [CW, 0], [CW, CH], [0, CH]]);   // Bild → Kartenkoordinaten
-  const gray = new Uint8Array(W * H), rnd = lcg(seed);
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    const d = Hm[6] * x + Hm[7] * y + 1;
-    const u = (Hm[0] * x + Hm[1] * y + Hm[2]) / d, v = (Hm[3] * x + Hm[4] * y + Hm[5]) / d;
-    const val = u >= 0 && u <= CW && v >= 0 && v <= CH ? cardLuma(u, v) : bgLuma(bg, x, y, rnd);
-    gray[y * W + x] = clamp(Math.round(val), 0, 255);
+// Szene: cards = [{ quad, luma(u, v) }], übrige Pixel = Hintergrund bg. Mehrere Karten sind erlaubt (Nachbarkarte).
+function scene(cards, bg, seed = 7, w = W, h = H) {
+  const maps = cards.map((c) => ({ Hm: homography(c.quad, [[0, 0], [CW, 0], [CW, CH], [0, CH]]), luma: c.luma || cardLuma }));
+  const gray = new Uint8Array(w * h), rnd = lcg(seed);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    let val = null;
+    for (const { Hm, luma } of maps) {
+      const d = Hm[6] * x + Hm[7] * y + 1;
+      const u = (Hm[0] * x + Hm[1] * y + Hm[2]) / d, v = (Hm[3] * x + Hm[4] * y + Hm[5]) / d;
+      if (u >= 0 && u <= CW && v >= 0 && v <= CH) { val = luma(u, v); break; }
+    }
+    if (val === null) val = bgLuma(bg, x, y, rnd);
+    gray[y * w + x] = clamp(Math.round(val), 0, 255);
   }
   return gray;
 }
+const render = (quad, bg, seed = 7) => scene([{ quad }], bg, seed);
 const maxErr = (got, want) => Math.max(...got.map((p, i) => Math.hypot(p[0] - want[i][0], p[1] - want[i][1])));
 
 let fails = 0, count = 0;
@@ -127,6 +134,46 @@ check('Falsches Seitenverhältnis (quadratisch) → null', () => {
 check('Zu kleine Karte (unter minArea) → null', () => {
   assert.equal(CD.detectCard(render(cardQuad(120, 160, 60), 'mid'), W, H), null);
 });
+
+// Robustheit für echte Fotos. Alle Szenen: Ecken müssen am ÄUSSEREN Kartenrand auf ≤ 2 px stimmen.
+function expectCorners(name, img, quad, w = W, h = H) {
+  check(name, () => {
+    const r = CD.detectCard(img, w, h);
+    assert.ok(r, 'keine Karte erkannt');
+    const e = maxErr(r.corners, quad);
+    assert.ok(e <= 2, `größte Abweichung ${e.toFixed(2)} px: ${JSON.stringify(r.corners.map((p) => p.map((v) => +v.toFixed(1))))}`);
+  });
+}
+// (a) zweite Karte rechts daneben, Lücke ca. 10 % der Kartenbreite
+{
+  const w = 120, main = cardQuad(100, 160, w), gap = 0.10 * w;
+  const nb = cardQuad(100 + w + gap + w / 2, 160, w);
+  expectCorners('(a) Nachbarkarte rechts (Lücke 10 %): Ecken am äußeren Rand', scene([{ quad: main }, { quad: nb }], 'mid'), main);
+}
+// (b) dunkler Hintergrund 40, schwarzer Rand 15, helle Innenlinie, außen nur 25 Graustufen Kontrast
+{
+  const frame = (u, v) => {
+    if (u < 3 || u > CW - 3 || v < 3 || v > CH - 3) return 15;             // schwarzer Rand
+    if (u < 4.5 || u > CW - 4.5 || v < 4.5 || v > CH - 4.5) return 200;    // helle Innenlinie
+    return cardLuma(u, v);
+  };
+  const q = cardQuad(120, 160, 150);
+  expectCorners('(b) dunkler Hintergrund 40, schwarzer Rand 15, helle Innenlinie', scene([{ quad: q, luma: frame }], 'dark40'), q);
+}
+// (c) dunkler Hintergrund 70 mit dichtem Schachbrett-Motiv (früher Fehlfall)
+{
+  const checker = (u, v) => {
+    if (u >= 6 && u <= 57 && v >= 12 && v <= 50) return ((Math.floor(u / 2) + Math.floor(v / 2)) % 2) ? 225 : 50;
+    return cardLuma(u, v);
+  };
+  const q = cardQuad(120, 160, 150);
+  expectCorners('(c) dunkler Hintergrund 70, Schachbrett-Motiv', scene([{ quad: q, luma: checker }], 'dark'), q);
+}
+// (d) Teppich-Textur mit Rauschen ±30 bleibt erkennbar
+{
+  const q = cardQuad(120, 160, 150);
+  expectCorners('(d) Teppichhintergrund mit Rauschen ±30', scene([{ quad: q }], 'carpet'), q);
+}
 
 // warpCard: achsparalleles Rechteck = einfacher Zuschnitt (±2 pro Kanal)
 check('warpCard: achsparalleles Rechteck liefert denselben Zuschnitt (±2 je Kanal)', () => {

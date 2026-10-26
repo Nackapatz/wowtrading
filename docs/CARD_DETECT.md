@@ -24,21 +24,30 @@ Abhängigkeiten, nur reine Funktionen auf Arrays. Wird in `tools/embed_web.py` u
 
 Algorithmus:
 1. Leicht glätten (3×3 Box) und Sobel-Gradienten `gx`, `gy` berechnen.
-2. Für jede Seite Kantenpunkte sammeln: Je 40 Scanlinien senkrecht zur Seite, gleichmäßig verteilt über
-   die mittleren 70 % der Seite. Jede Linie läuft von außen nach innen bis zur Bildmitte. Gesucht wird
-   die erste Stelle, deren Gradient senkrecht zur Seite ≥ `T` ist und deren Betrag ein lokales Maximum
-   bildet. `T` ist das 85. Perzentil des Gradientenbetrags im Bild, mindestens 24.
-   Die Karte hat einen dunklen Rand, der Hintergrund ist beliebig. Deshalb zählt das Vorzeichen nicht.
-3. Pro Seite eine Gerade robust einpassen: RANSAC mit 60 Iterationen und deterministischem
-   Pseudozufall (fester Seed, LCG, damit Tests reproduzierbar sind). Inlier liegen ≤ 1,5 px von der
-   Geraden. Danach Kleinste-Quadrate-Fit über die Inlier. Weniger als 12 Inlier → `null`.
-4. Ecken = Schnittpunkte benachbarter Geraden. Verworfen wird mit `null`, wenn:
-   - eine Ecke außerhalb des Bildes liegt (mehr als 2 px),
-   - ein Innenwinkel außerhalb 75°–105° liegt,
-   - das Verhältnis Breite/Höhe (Mittel der gegenüberliegenden Seitenlängen) mehr als `aspectTol`
-     von `aspect` abweicht,
-   - die Fläche kleiner als `minArea` ist.
-5. `score` = Inlier gesamt / Scanlinien gesamt.
+2. Kantenpunkte je Seite: 40 Scanlinien senkrecht zur Seite, gleichmäßig verteilt über die mittleren 70 % der
+   Seite. Jede Linie läuft von außen nach innen bis zur Bildmitte und nimmt bis zu vier lokale Maxima des
+   Gradienten senkrecht zur Seite, die ≥ `T` sind und mindestens 3 px auseinander liegen. Die Karte hat einen
+   dunklen Rand, der Hintergrund ist beliebig. Deshalb zählt das Vorzeichen nicht.
+   `T` = max(20, 80. Perzentil des Gradientenbetrags im Bild).
+3. Sequentielles RANSAC je Seite: Bis zu vier Geraden mit je mindestens 10 Inliern. Jede Gerade wird mit 60
+   Zufallspaaren (fester Seed, LCG) gesucht. Inlier liegen ≤ 1,5 px von der Geraden. Danach
+   Gesamtkleinstquadrate über die Inlier. Die Inlier werden entfernt, dann folgt die nächste Gerade. Je Kandidat
+   gespeichert: Gerade, Inlierzahl, mittlere Position.
+4. Kombinationen: Aus jeder Seite genau ein Kandidat (höchstens 4⁴ = 256). Gültig ist eine Kombination, wenn
+   - alle Ecken (Schnittpunkte benachbarter Geraden) höchstens 2 px außerhalb des Bildes liegen,
+   - alle Innenwinkel zwischen 75° und 105° liegen,
+   - das Verhältnis Breite/Höhe (Mittel der gegenüberliegenden Seitenlängen) höchstens `aspectTol` von `aspect` abweicht,
+   - die Fläche mindestens `minArea` der Suchfläche beträgt,
+   - die Inlier mindestens 0,5 · 4 · 40 ausmachen (siehe Umsetzungsnotizen).
+   Bewertung: Summe der Inlier × (1 − |Verhältnis − aspect| / aspectTol × 0,5). Die beste gültige Kombination gewinnt.
+   Gibt es keine gültige, ist das Ergebnis `null`.
+5. Außenrand-Verfeinerung je Seite der Gewinnerkombination: Ein weiterer Kandidat derselben Seite wird übernommen,
+   wenn er höchstens 3° von der Richtung der aktuellen Geraden abweicht, weiter außen liegt, höchstens 7 % der
+   Kartenbreite (oben/unten) bzw. -höhe (links/rechts) entfernt ist, mindestens 10 Inlier hat und mindestens die
+   Hälfte der Inlier der aktuellen Seite. Die Karte muss
+   mit ihm gültig bleiben. Gewählt wird der äußerste solche Kandidat. Die Kandidaten für diesen Schritt stammen aus
+   einer niedrigeren Schwelle `max(20, 50. Perzentil)`, damit auch ein schwacher äußerer Rand gefunden wird.
+6. `score` = Inlier der gewählten Geraden / Scanlinien gesamt (4 · 40 = 160).
 
 ### `warpCard(src, sw, sh, corners, dw, dh, ch)` → `Uint8ClampedArray` (RGBA, dw×dh)
 
@@ -101,11 +110,20 @@ Ist `cards.json` noch Version 1 (keine Nummern), steht im Status statt „Set+Nu
 
 ## Tests
 
-- `webapp/dev/carddetect_test.js` (Node): synthetische Bilder (Hintergrund mit Rauschen und Textur,
+- `webapp/dev/carddetect_test.js` (Node, 17 Prüfungen): synthetische Bilder (Hintergrund mit Rauschen und Textur,
   dunkle Karte mit hellem Innenbereich): gerade, verschoben, um 4° gedreht, perspektivisch verzerrt,
   heller und dunkler Hintergrund. Die Ecken müssen auf ≤ 2 px stimmen. Leeres Rauschbild →
-  `null`. Falsches Seitenverhältnis (quadratisch) → `null`. `warpCard` liefert für ein achsparalleles
-  Rechteck dieselben Pixel wie ein einfacher Zuschnitt (±2 pro Kanal). `sharpness`: unscharf < scharf.
+  `null`. Falsches Seitenverhältnis (quadratisch) → `null`. Zu kleine Karte → `null`. `warpCard` liefert für ein
+  achsparalleles Rechteck dieselben Pixel wie ein einfacher Zuschnitt (±2 pro Kanal). `sharpness`: unscharf < scharf.
+- Robustheit für echte Fotos, alle Ecken am äußeren Kartenrand auf ≤ 2 px:
+  - (a) Nachbarkarte rechts mit Lücke 10 % der Kartenbreite,
+  - (b) dunkler Hintergrund 40, schwarzer Rand 15, helle Innenlinie, außen nur 25 Graustufen Kontrast,
+  - (c) dunkler Hintergrund 70 mit dichtem Schachbrett-Motiv (4 Zelleneinheiten der Karte),
+  - (d) Teppichhintergrund mit Rauschen ±30 bleibt erkennbar.
+- Laufzeit: `detectCard` auf 240×330 px braucht im Mittel etwa 5,6 ms je Aufruf (Node 22, 20 Läufe nach einem Warm-up).
+  Ziel: unter 15 ms.
+- Randprüfung (nicht in der Testdatei, nur Parameterlauf): Nachbarlücke 5 % → 1,00 px, 10 % → 0,81 px, 15 % → 0,70 px. Teppich-Seeds
+  1–6 → 0,67 bis 0,93 px. Schachbrett-Verschiebung 0–2 px → 0,59 bis 0,72 px.
 - E2E: Der Fake-Kamerastream (`camera.y4m`) zeigt eine Sample-Karte. Sie muss erkannt, als Polygon
   angezeigt und über den Standbild-Pfad erfasst werden. Zusätzlich wird ein y4m mit kleinerer,
   versetzter und leicht gedrehter Karte erzeugt (`make_sample_art.py` erweitern), und auch diese
@@ -138,14 +156,35 @@ Abweichungen und Präzisierungen, jeweils mit Grund:
   kann ihn dort nicht finden. `camera-offset.y4m` ist neu (kleiner, versetzt, 4° gedreht, Wellenmuster),
   `camera-unknown.y4m` zeigt eine Karte ohne Datenbankeintrag (kein Treffer, Standbilder werden zusammengeführt).
 - **Synthetische Testkarte**: Die Illustration der Testkarte ist weich gezeichnet. Mit einem 4-Pixel-Schachbrett
-  dominierte das Kunstfeld das 85. Perzentil, und der Fall „dunkler Hintergrund“ fand den inneren statt des äußeren
-  Randes (9,85 px daneben). Das ist eine Grenze des Verfahrens, siehe unten.
+  dominierte das Kunstfeld die Schwelle, und der Fall „dunkler Hintergrund“ fand den inneren statt des äußeren
+  Randes. Der neue Fall (c) mit Schachbrett prüft genau das. Mit der Schwelle nach Spezifikation (80. Perzentil) lag
+  T bei 220, der äußere Rand nur bei etwa 121. Deshalb nimmt die Außenrand-Verfeinerung (Schritt 5) ihre Kandidaten
+  aus der niedrigeren Schwelle (50. Perzentil). Das ist eine Abweichung von Schritt 2 (siehe unten).
+- **Mindestanteil Inlier** (neu, Schritt 4): Eine Kombination braucht Inlier auf mindestens 50 % der Scanlinien
+  (Score ≥ 0,5). Rauschbilder (12 Seeds, 240×320) erreichen mit den übrigen Regeln sonst gültige Vierecke mit Score
+  0,27 bis 0,34. Der Abstand zu den Testszenen (dort ab etwa 0,6) ist nicht groß. Die Scanlinien laufen über den
+  ganzen Suchbereich. Füllt die Karte nur einen Teil davon, sinkt der Score. Das Testbild `camera-offset.y4m` hat im
+  App-Ausschnitt 0,68 und im ganzen Bild nur 0,54. Ein kleinerer Schwellwert wäre nötig, falls kleine Karten im
+  Suchbereich fehlen.
+- **Sequentielles RANSAC** (Schritt 3): Bis zu vier Kandidaten je Seite statt einer besten Geraden. So können ein
+  Nachbarkartenrand oder ein innerer Rand eine Seite nicht mehr allein festlegen. Die Auswahl entscheidet die
+  Kombinationsbewertung.
+- **Halbe Unterstützung für Verfeinerung** (neu, Schritt 5): Mit der niedrigeren Schwelle entstehen auf dem Teppich
+  und auf Kunst Zufallslinien mit 10 bis 11 Inliern, die dann bis 14 px nach außen springen. Auf dem Testbild
+  `camera-offset.y4m` wanderte so die rechte Kante um etwa 14 px, und die Erfassung schlug fehl. Der Außenrand-Kandidat
+  braucht deshalb mindestens die Hälfte der Inlier der aktuellen Seite. Danach stimmen die Ecken dieses Bildes mit der
+  Erkennung ohne Verfeinerung überein.
+- **Nachbarkarten**: Mit einer Lücke von 5 bis 15 % (Parameterlauf oben) bleibt der Fehler unter 1,1 px. Der Nachbarrand
+  liegt außerhalb der Verfeinerungsreichweite oder hat zu wenig Unterstützung. Lücken unter 5 % sind nicht geprüft.
 - **Kalibrier-Regler** „Schärfe-Grenze“ steht im Abschnitt „Erkennungs-Kalibrierung“ (so heißt er in der Oberfläche).
 
 Offen:
 
-- Dunkler Hintergrund bei sehr unruhigem Kunstfeld: Der äußere Rand mit geringem Kontrast liegt unter dem 85.
-  Perzentil des Bildes und kann verfehlt werden. Realistische Karten sind davon weniger betroffen, aber nicht
-  ausgeschlossen. Abhilfe wäre ein eigener Schwellwert für den äußeren Rand. Das wäre eine Änderung der Spezifikation.
-- Die gzip-Gesamtgröße liegt bei 42,1 KB (43.068 Byte). Das liegt unter den 45 KB, aber über dem 40-KB-Richtwert
+- Eine Nachbarkarte mit sehr kleiner Lücke (unter 5 % der Kartenbreite) ist nicht getestet. Die Verfeinerung könnte
+  dann den Nachbarrand wählen.
+- Die Schwelle nach Spezifikation (80. Perzentil) bleibt für die Hauptsuche. Auf Bildern mit sehr unruhigem Kunstfeld
+  kann ein Rand trotzdem fehlen, wenn er nicht im Verfeinerungsschritt liegt. Die Verfeinerung nutzt nur Kandidaten
+  innerhalb 7 % der Kartenbreite bzw. -höhe vom inneren Rand.
+- Die gzip-Gesamtgröße liegt bei 44,7 KB (44.662 Byte). Das liegt unter den 45 KB, aber über dem 40-KB-Richtwert
   in `tools/embed_web.py`. Der Richtwert ist unverändert, deshalb meldet das Skript eine Warnung.
+- Echte Fotos sind nicht getestet. Die Prüfungen laufen mit synthetischen Szenen.

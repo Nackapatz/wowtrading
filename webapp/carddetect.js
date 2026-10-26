@@ -4,9 +4,18 @@
 (function (root) {
   'use strict';
   var SCAN = 40;                  // Scanlinien je Seite
-  var RANSAC_IT = 60;             // RANSAC-Durchläufe je Seite
+  var PTS_LINE = 4;               // Kantenpunkte je Scanlinie (lokale Maxima von außen nach innen)
+  var MIN_GAP = 3;                // Mindestabstand zweier Kantenpunkte einer Scanlinie (px)
+  var RANSAC_IT = 60;             // RANSAC-Durchläufe je Kandidat
   var INLIER_PX = 1.5;            // Inlier-Abstand zur Geraden
-  var MIN_INLIERS = 12;           // darunter ist die Seite nicht gefunden
+  var MIN_INLIERS = 10;           // Kandidat braucht mindestens so viele Inlier
+  var MAX_CAND = 4;               // Kandidaten je Seite (sequentielles RANSAC)
+  var REFINE = 0.07;              // Außenrand: höchstens 7 % der Kartenbreite (oben/unten) bzw. -höhe (links/rechts)
+  var PARALLEL = 3 * Math.PI / 180;
+  var T_MIN = 20, T_PCT = 0.8;    // Kantenschwelle: max(20, 80. Perzentil des Gradientenbetrags)
+  var REF_SUPPORT = 0.5;          // Außenrand-Kandidat braucht mindestens so viele Inlier wie die aktuelle Seite (Hälfte)
+  var REF_PCT = 0.5;              // Außenrand-Kandidaten: niedrigere Schwelle (max(20, 50. Perzentil)), damit ein schwacher äußerer Rand gefunden wird
+  var MIN_SCORE = 0.5;            // Mindestanteil belegter Scanlinien (Inlier / 4·SCAN); Rauschen liegt bei ~0,3
   var SIDE_LO = 0.15, SIDE_HI = 0.85;   // Scanlinien über die mittleren 70 % der Seite
 
   function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
@@ -30,8 +39,8 @@
     }
     return { gx: gx, gy: gy };
   }
-  // 85. Perzentil des Gradientenbetrags (Histogramm, ganzzahlig gerundet)
-  function percentile85(g, w, h) {
+  // Perzentil des Gradientenbetrags (Histogramm, ganzzahlig gerundet)
+  function percentile(g, w, h, frac) {
     var hist = new Uint32Array(2048), n = 0, x, y, i, m;
     for (y = 2; y < h - 2; y++) for (x = 2; x < w - 2; x++) {
       i = y * w + x;
@@ -39,13 +48,13 @@
       hist[Math.min(2047, Math.round(m))]++;
       n++;
     }
-    var target = 0.85 * n, acc = 0;
+    var target = frac * n, acc = 0;
     for (var b = 0; b < 2048; b++) { acc += hist[b]; if (acc >= target) return b; }
     return 2047;
   }
 
   // Kantenpunkte einer Seite. side: 0 oben, 1 rechts, 2 unten, 3 links.
-  // Von außen nach innen: erste Stelle mit |Gradient senkrecht zur Seite| ≥ T, die lokales Maximum ist.
+  // Je Scanlinie von außen nach innen bis zu 4 lokale Maxima ≥ T, untereinander mindestens 3 px entfernt.
   function sidePoints(comp, w, h, side, T) {
     var horiz = side === 1 || side === 3;           // Seite links/rechts → Scanlinie waagerecht
     var len = horiz ? h : w, depth = horiz ? w : h;
@@ -53,18 +62,20 @@
     var dir = outer ? 1 : -1;
     var mid = Math.floor(depth / 2);
     var start = outer ? 3 : depth - 4;
-    var pts = [], k, p, v, c0, ca, cb, found;
+    var step = horiz ? 1 : w;
+    var pts = [], k, p, v, i0, c0, ca, cb, n, last;
     for (k = 0; k < SCAN; k++) {
       p = Math.round((SIDE_LO + (SIDE_HI - SIDE_LO) * k / (SCAN - 1)) * (len - 1));
-      found = false;
+      n = 0; last = -1e9;
       for (v = start; dir > 0 ? v <= mid : v >= mid; v += dir) {
-        var i0 = horiz ? p * w + v : v * w + p;
-        var iA = horiz ? p * w + v - dir : (v - dir) * w + p;
-        var iB = horiz ? p * w + v + dir : (v + dir) * w + p;
-        c0 = Math.abs(comp[i0]); ca = Math.abs(comp[iA]); cb = Math.abs(comp[iB]);
-        if (c0 >= T && c0 >= ca && c0 > cb) { found = true; break; }
+        i0 = horiz ? p * w + v : v * w + p;
+        c0 = Math.abs(comp[i0]); ca = Math.abs(comp[i0 - dir * step]); cb = Math.abs(comp[i0 + dir * step]);
+        if (c0 >= T && c0 >= ca && c0 > cb && Math.abs(v - last) >= MIN_GAP) {
+          pts.push(horiz ? [v, p] : [p, v]);
+          last = v;
+          if (++n === PTS_LINE) break;
+        }
       }
-      if (found) pts.push(horiz ? [v, p] : [p, v]);
     }
     return pts;
   }
@@ -90,10 +101,10 @@
     else { a = sxy; b = lmin - sxx; L = Math.hypot(a, b); a /= L; b /= L; }
     return { line: [a, b, a * mx + b * my], inliers: sel };
   }
-  // RANSAC: 60 zufällige Punktpaare, beste Gerade, dann Ausgleich über die Inlier
-  function fitSide(pts, rnd) {
+  // RANSAC: RANSAC_IT zufällige Punktpaare, beste Gerade, dann Ausgleich über die Inlier
+  function ransacLine(pts, rnd) {
     var n = pts.length, best = null, bestCount = 0, k, i, j, q, a, b, c, cnt;
-    if (n < MIN_INLIERS) return null;
+    if (n < 2) return null;
     for (k = 0; k < RANSAC_IT; k++) {
       i = rnd() % n; j = rnd() % n;
       if (i === j) continue;
@@ -104,9 +115,22 @@
       for (q = 0; q < n; q++) if (Math.abs(a * pts[q][0] + b * pts[q][1] - c) <= INLIER_PX) cnt++;
       if (cnt > bestCount) { bestCount = cnt; best = [a, b, c]; }
     }
-    if (!best) return null;
-    var f = refit(pts, best);
-    return f && f.inliers.length >= MIN_INLIERS ? f : null;
+    return best ? refit(pts, best) : null;
+  }
+  // Sequentielles RANSAC: Gerade finden, ihre Inlier entfernen, wiederholen. Höchstens MAX_CAND kandidaten mit ≥ MIN_INLIERS.
+  // Jeder Kandidat: Linie, Inlier-Zahl, mittlere Position (mx, my).
+  function fitSide(pts, rnd) {
+    var out = [], pool = pts, c, f, i, m, mx, my, L;
+    for (c = 0; c < MAX_CAND && pool.length >= MIN_INLIERS; c++) {
+      f = ransacLine(pool, rnd);
+      if (!f || f.inliers.length < MIN_INLIERS) break;
+      m = f.inliers.length; mx = 0; my = 0;
+      for (i = 0; i < m; i++) { mx += f.inliers[i][0]; my += f.inliers[i][1]; }
+      out.push({ line: f.line, n: m, mx: mx / m, my: my / m });
+      L = f.line;
+      pool = pool.filter(function (p) { return Math.abs(L[0] * p[0] + L[1] * p[1] - L[2]) > INLIER_PX; });
+    }
+    return out;
   }
 
   // Schnittpunkt zweier Geraden (Cramer), null bei Parallelität
@@ -127,7 +151,39 @@
     return Math.abs(s) / 2;
   }
 
+  // Ecken aus vier Geraden (Seiten oben, rechts, unten, links): TL, TR, BR, BL
+  function cornersOf(L) { return [cross(L[0], L[3]), cross(L[0], L[1]), cross(L[2], L[1]), cross(L[2], L[3])]; }
+  function dims(q) {
+    return [(Math.hypot(q[1][0] - q[0][0], q[1][1] - q[0][1]) + Math.hypot(q[2][0] - q[3][0], q[2][1] - q[3][1])) / 2,
+      (Math.hypot(q[3][0] - q[0][0], q[3][1] - q[0][1]) + Math.hypot(q[2][0] - q[1][0], q[2][1] - q[1][1])) / 2];
+  }
+  // Gerade ist parallel (Winkel der Normalen < 3°)
+  function parallel(l1, l2) {
+    var d = Math.abs(Math.atan2(l1[1], l1[0]) - Math.atan2(l2[1], l2[0])) % Math.PI;
+    return Math.min(d, Math.PI - d) < PARALLEL;
+  }
+  // Gültige Karte? Ecken im Bild (höchstens 2 px außerhalb), Innenwinkel 75°–105°, Seitenverhältnis, Fläche.
+  // Liefert das Seitenverhältnis oder null.
+  function quadRatio(c, w, h, aspect, aspectTol, minArea) {
+    var i, p;
+    for (i = 0; i < 4; i++) {
+      p = c[i];
+      if (!p || !isFinite(p[0]) || !isFinite(p[1])) return null;
+      if (p[0] < -2 || p[0] > w + 1 || p[1] < -2 || p[1] > h + 1) return null;
+    }
+    var ang = [angleDeg(c[0], c[1], c[3]), angleDeg(c[1], c[0], c[2]), angleDeg(c[2], c[1], c[3]), angleDeg(c[3], c[2], c[0])];
+    for (i = 0; i < 4; i++) if (!(ang[i] >= 75 && ang[i] <= 105)) return null;
+    var d = dims(c);
+    if (!(d[1] > 0)) return null;
+    var ratio = d[0] / d[1];
+    if (Math.abs(ratio - aspect) > aspectTol) return null;
+    if (area(c) / (w * h) < minArea) return null;
+    return ratio;
+  }
+
   /* gray: Uint8Array w×h (Graustufen, zeilenweise). opts: aspect (63/88), aspectTol (0,08), minArea (0,25).
+   * Ablauf: Kantenpunkte je Seite, sequentielles RANSAC (bis 4 Kandidaten je Seite), beste gültige Kombination
+   * (Bewertung: Summe der Inlier × (1 − |Verhältnis − aspect| / aspectTol × 0,5)), dann Außenrand-Verfeinerung.
    * Ergebnis: { corners: [[x,y] oben links, oben rechts, unten rechts, unten links], score } oder null. */
   function detectCard(gray, w, h, opts) {
     opts = opts || {};
@@ -136,28 +192,44 @@
     var minArea = opts.minArea != null ? opts.minArea : 0.25;
     if (!gray || w < 16 || h < 16) return null;
     var g = gradients(gray, w, h);
-    var T = Math.max(24, percentile85(g, w, h));
-    var rnd = lcg(1), sides = [], total = 0, s;
+    var T = Math.max(T_MIN, percentile(g, w, h, T_PCT));
+    var rnd = lcg(1), cand = [], s, a, b, c, d, k, r, v, best = null;
     for (s = 0; s < 4; s++) {
-      var pts = sidePoints(s % 2 === 0 ? g.gy : g.gx, w, h, s, T);
-      var f = fitSide(pts, rnd);
-      if (!f) return null;
-      sides.push(f.line); total += f.inliers.length;
+      var cs = fitSide(sidePoints(s % 2 === 0 ? g.gy : g.gx, w, h, s, T), rnd);
+      if (!cs.length) return null;
+      cand.push(cs);
     }
-    // sides: 0 oben, 1 rechts, 2 unten, 3 links
-    var c = [cross(sides[0], sides[3]), cross(sides[0], sides[1]), cross(sides[2], sides[1]), cross(sides[2], sides[3])];
-    for (var i = 0; i < 4; i++) {
-      var p = c[i];
-      if (!p || !isFinite(p[0]) || !isFinite(p[1])) return null;
-      if (p[0] < -2 || p[0] > w + 1 || p[1] < -2 || p[1] > h + 1) return null;   // mehr als 2 px außerhalb
+    // Alle Kombinationen (höchstens 4⁴ = 256): beste gültige gewinnt
+    for (a = 0; a < cand[0].length; a++) for (b = 0; b < cand[1].length; b++)
+      for (c = 0; c < cand[2].length; c++) for (d = 0; d < cand[3].length; d++) {
+        var pick = [cand[0][a], cand[1][b], cand[2][c], cand[3][d]];
+        if ((pick[0].n + pick[1].n + pick[2].n + pick[3].n) / (4 * SCAN) < MIN_SCORE) continue;
+        r = quadRatio(cornersOf(pick.map(function (p) { return p.line; })), w, h, aspect, aspectTol, minArea);
+        if (r == null) continue;
+        v = (pick[0].n + pick[1].n + pick[2].n + pick[3].n) * (1 - Math.abs(r - aspect) / aspectTol * 0.5);
+        if (!best || v > best.v) best = { v: v, pick: pick };
+      }
+    if (!best) return null;
+    // Außenrand: je Seite der Gewinnerkombination der äußerste parallele Kandidat, der die Karte gültig lässt
+    var pk = best.pick.slice(), q = cornersOf(pk.map(function (p) { return p.line; })), dm = dims(q);
+    var OUT = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+    var TR = Math.max(T_MIN, percentile(g, w, h, REF_PCT)), rcand = [];
+    for (s = 0; s < 4; s++) rcand.push(fitSide(sidePoints(s % 2 === 0 ? g.gy : g.gx, w, h, s, TR), rnd));
+    for (s = 0; s < 4; s++) {
+      var cur = pk[s], lim = REFINE * (s % 2 === 0 ? dm[0] : dm[1]), bestK = null, bestOff = 0;
+      for (k = 0; k < rcand[s].length; k++) {
+        var kc = rcand[s][k];
+        if (kc === cur || kc.n < REF_SUPPORT * cur.n || !parallel(kc.line, cur.line)) continue;
+        var off = (kc.mx - cur.mx) * OUT[s][0] + (kc.my - cur.my) * OUT[s][1];
+        if (off <= 0 || off > lim || off <= bestOff) continue;
+        var trial = pk.slice(); trial[s] = kc;
+        if (quadRatio(cornersOf(trial.map(function (p) { return p.line; })), w, h, aspect, aspectTol, minArea) == null) continue;
+        bestK = kc; bestOff = off;
+      }
+      if (bestK) pk[s] = bestK;
     }
-    var angles = [angleDeg(c[0], c[1], c[3]), angleDeg(c[1], c[0], c[2]), angleDeg(c[2], c[1], c[3]), angleDeg(c[3], c[2], c[0])];
-    for (i = 0; i < 4; i++) if (!(angles[i] >= 75 && angles[i] <= 105)) return null;
-    var cw = (Math.hypot(c[1][0] - c[0][0], c[1][1] - c[0][1]) + Math.hypot(c[2][0] - c[3][0], c[2][1] - c[3][1])) / 2;
-    var ch = (Math.hypot(c[3][0] - c[0][0], c[3][1] - c[0][1]) + Math.hypot(c[2][0] - c[1][0], c[2][1] - c[1][1])) / 2;
-    if (!(ch > 0) || Math.abs(cw / ch - aspect) > aspectTol) return null;
-    if (area(c) / (w * h) < minArea) return null;
-    return { corners: c, score: total / (4 * SCAN) };
+    var total = pk[0].n + pk[1].n + pk[2].n + pk[3].n;
+    return { corners: cornersOf(pk.map(function (p) { return p.line; })), score: total / (4 * SCAN) };
   }
 
   // Gauß mit Spaltenpivotsuche; null bei singulärem System
