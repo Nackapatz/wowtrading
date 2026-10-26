@@ -26,18 +26,15 @@
     <div id="cam" class="cam">
       <video id="video" playsinline muted hidden></video>
       <div id="guide" class="guide" aria-hidden="true" hidden></div>
-      <div id="boxName" class="cal-box" aria-hidden="true" hidden><span>Name</span></div>
-      <div id="boxNum" class="cal-box" aria-hidden="true" hidden><span>Nummer</span></div>
       <div id="boxArt" class="cal-box art" aria-hidden="true" hidden><span>Bild</span></div>
       <div id="camMsg" class="cam-msg">Kamera aus. Tippe auf „Scan starten“, um die Kartenerkennung zu starten.</div>
       <div id="live" class="live" aria-live="polite"></div>
     </div>
 
     <div id="dbg" class="dbg" hidden>
-      <p class="meta">Debug: Illustration (Bildabgleich) und OCR-Ausschnitte</p>
+      <p class="meta">Debug: Illustration (Bildabgleich) und OCR-Bereiche mit Rohtext</p>
       <canvas id="cvArt" width="10" height="10" aria-label="Ausschnitt Illustration"></canvas>
-      <canvas id="cvName" width="10" height="10" aria-label="Ausschnitt Name"></canvas>
-      <canvas id="cvNum" width="10" height="10" aria-label="Ausschnitt Nummer"></canvas>
+      <div id="dbgReg" class="dbg-reg"></div>
       <pre id="dbgTxt" class="dbg-txt"></pre>
     </div>
 
@@ -56,7 +53,7 @@
     <h2 class="h2">Zuletzt erfasst</h2>
     <ul id="recent" class="list"></ul>
 
-    <p class="hint">Erkannt wird über die Illustration der Karte, unabhängig von der Sprache – deutsche Karten funktionieren. Namen werden englisch angezeigt (TCGplayer).</p>
+    <p class="hint">Erkannt wird kombiniert: Set-Wort und Sammlernummer unten auf der Karte (z. B. „BETRAYER 163/264“), Kosten/Angriff/Leben, Illustration und Name. Das funktioniert auch mit deutschen Karten; deutsche Namen lernt die App bei jeder bestätigten Erfassung dazu. Englische Namen stammen von TCGplayer.</p>
   </section>
 
   <!-- ============ Suche ============ -->
@@ -131,16 +128,25 @@
     </form>
 
     <section class="box cal" aria-labelledby="calH">
-      <h2 id="calH" class="h2">OCR-Kalibrierung</h2>
-      <p class="hint">Der Rahmen „Bild“ zeigt den Bereich für den Bildabgleich. Name und Nummer werden nur als Rückfall per Texterkennung gelesen; verschiebe ihre Rahmen mit den Reglern (±10 % der Kartenhöhe), bis sie auf der Karte liegen.</p>
-      <label class="field"><span>Namenszeile: Verschiebung <output id="calNameV">0</output> %</span>
-        <input id="calNameS" type="range" min="-10" max="10" step="1" value="0"></label>
-      <label class="field"><span>Nummer: Verschiebung <output id="calNumV">0</output> %</span>
-        <input id="calNumS" type="range" min="-10" max="10" step="1" value="0"></label>
+      <h2 id="calH" class="h2">Erkennungs-Kalibrierung</h2>
+      <p class="hint">Die gestrichelten Rahmen im Kamerabild zeigen, wo Name, Nummernleiste, Kosten, Angriff und Leben gelesen werden („Bild“ = Bildabgleich). Wähle einen Bereich und verschiebe ihn (±10 % der Kartenbreite/-höhe), bis er auf der Karte liegt.</p>
+      <label class="field"><span>Bereich</span><select id="calReg"></select></label>
+      <label class="field"><span>Waagerecht <output id="calXV">0</output> %</span>
+        <input id="calXS" type="range" min="-10" max="10" step="1" value="0"></label>
+      <label class="field"><span>Senkrecht <output id="calYV">0</output> %</span>
+        <input id="calYS" type="range" min="-10" max="10" step="1" value="0"></label>
       <label class="field"><span>Bild-Toleranz (max. Abstand) <output id="calImgV">70</output></span>
         <input id="calImgS" type="range" min="40" max="110" step="2" value="70"></label>
       <label class="switch"><input type="checkbox" id="calDbg"><span>Debug-Ansicht unter der Kamera</span></label>
       <div class="actions"><button id="calReset" class="btn" type="button">Kalibrierung zurücksetzen</button></div>
+    </section>
+
+    <section class="box" aria-labelledby="learnH">
+      <h2 id="learnH" class="h2">Gelernte deutsche Namen</h2>
+      <p class="hint">Nach jeder bestätigten Erfassung merkt sich die App den gelesenen deutschen Namen zur Karte. Sichere die Liste oder übertrage sie auf ein anderes Gerät.</p>
+      <p id="learnInfo" class="meta"></p>
+      <div class="actions"><button id="btnLearnExp" class="btn" type="button">Exportieren (JSON)</button><button id="btnLearnImp" class="btn" type="button">Importieren …</button></div>
+      <input id="learnFile" type="file" accept="application/json,.json" hidden>
     </section>
 
     <h2 class="h2">Scanner</h2>

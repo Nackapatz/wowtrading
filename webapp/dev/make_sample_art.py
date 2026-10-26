@@ -6,7 +6,7 @@
 - webapp/dev/sample-data/camera.y4m (Kamerabild mit Sample-Karte im Overlay-Rahmen, für Chromiums Fake-Kamera)
 
 Nachdrucke (gleicher Name in anderem Set, "(Foil)"-Variante) bekommen dieselbe Illustration.
-Eine Karte (900024) bleibt absichtlich ohne Hash. Aufruf: python3 webapp/dev/make_sample_art.py
+Eine Karte (900024) bleibt absichtlich ohne Hash, Karten ohne productId (p = null) haben kein Bild. Aufruf: python3 webapp/dev/make_sample_art.py
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ sys.path.insert(0, str(HERE.parent.parent / "data-pipeline"))
 import arthash  # noqa: E402
 
 W, H = 200, 279
-SAME_ART = {900016: 900001, 900017: 900009, 900026: 900011}   # Nachdrucke → Illustration des Originals
+SAME_ART = {900016: 900001, 900017: 900009, 900026: 900011, 900032: 900031}   # Nachdrucke → Illustration des Originals
 NO_HASH = {900024}
 CAMERA_CARD = 900003
 
@@ -101,7 +101,7 @@ def main() -> int:
     hashes = {}
     for card in cards:
         pid = card["p"]
-        if pid in NO_HASH:
+        if pid is None or pid in NO_HASH:              # Karte ohne TCGplayer-Produkt: kein Bild
             continue
         path = img_dir / f"{pid}.png"
         Image.frombytes("RGB", (W, H), card_pixels(SAME_ART.get(pid, pid))).save(path, format="PNG", optimize=True)

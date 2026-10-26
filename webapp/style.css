@@ -99,6 +99,10 @@ strong { color: var(--text); }
 .dbg { display: flex; flex-direction: column; gap: 6px; }
 .dbg canvas { width: 100%; height: auto; display: block; background: #000; border: 1px solid var(--border); border-radius: 6px; }
 .dbg #cvArt { width: 50%; max-width: 200px; image-rendering: pixelated; }
+.dbg-reg { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.dbg-reg figure { margin: 0; min-width: 0; }
+.dbg-reg .wide { grid-column: 1 / -1; }
+.dbg-reg figcaption { font-size: .75rem; color: var(--muted); overflow-wrap: anywhere; }
 .dbg-txt {
   margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border);
   font: .82rem/1.4 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere;
@@ -238,3 +242,4 @@ dialog::backdrop { background: rgba(0, 0, 0, .6); }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+.chip.sm { min-height: 44px; margin-top: 8px; font-size: .9rem; }

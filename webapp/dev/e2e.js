@@ -69,9 +69,9 @@ async function main() {
   /* ---------- Start und Daten ---------- */
   await check('Start: Daten geladen (26 Beispielkarten)', async () => {
     const info = await page.textContent('#dataInfo');
-    assert.match(info, /26 Karten/);
+    assert.match(info, /30 Karten/);
     const st = await page.evaluate(() => window.__wow.state());
-    assert.equal(st.indexed, 26);
+    assert.equal(st.indexed, 30);
     assert.equal(st.settings.currency, 'EUR');
     assert.match(await page.textContent('#espPill'), /Scanner .* Scans/);
   });
@@ -84,14 +84,16 @@ async function main() {
     assert.equal(/['"`]\/api\//.test(src), false, 'absolute /api/-Pfade gefunden');
     assert.match(src, /tesseract\.js@5\.1\.1\/dist\/worker\.min\.js/);
     assert.match(src, /tesseract\.js-core@5\.1\.1/);
-    assert.match(src, /@tesseract\.js-data\/eng@1\.0\.0\/4\.0\.0_best_int/);
+    assert.match(src, /@tesseract\.js-data\/\$\{lang\}@1\.0\.0\/4\.0\.0_best_int/);
+    assert.match(src, /lang: 'deu'/);
   });
   await check('Start: keine Seitenfehler', async () => { assert.deepEqual(page.errors, []); });
   await page.screenshot({ path: path.join(SHOTS, '01-scan.png') });
 
   /* ---------- Abgleich ---------- */
-  const unlock = async () => { await page.evaluate(() => window.__wow.frame('', '')); await page.evaluate(() => window.__wow.frame('', '')); };
-  const frame = (n, num = '') => page.evaluate(([a, b]) => window.__wow.frame(a, b), [n, num]);
+  // Frame mit vorgegebenen OCR-Rohtexten je Bereich; ein String steht für die Nummernleiste
+  const frame = (inj, opts = {}) => page.evaluate(([x, o]) => window.__wow.frame(x, o), [typeof inj === 'string' ? { strip: inj } : inj, opts]);
+  const unlock = async () => { await frame({}); await frame({}); };
   await check('Abgleich: exakter Name (eindeutige Karte)', async () => {
     const m = await page.evaluate(() => window.__wow.testMatch('Sample Frost Oracle'));
     assert.equal(m.top.pid, 900003);
@@ -141,44 +143,51 @@ async function main() {
   });
 
   /* ---------- Stabilitätsregel und Sperre ---------- */
-  await check('Stabilität: 1 Frame erfasst nicht, 2 gleiche Frames erfassen genau einmal; OCR-Nummer wird gespeichert', async () => {
+  await check('Stabilität: 1 Frame erfasst nicht, 2 gleiche Frames erfassen genau einmal (Set-Wort + Nummer)', async () => {
     const before = await scanCount();
-    await frame('Sample Iron Maiden', '045/120');
+    await frame('BETA 2/20');
     assert.equal(await scanCount(), before, 'nach 1 Frame keine Erfassung');
-    await frame('Sample Iron Maiden', '045/120');
+    await frame('BETA 2/20');
     assert.equal(await scanCount(), before + 1, 'nach 2 Frames eine Erfassung');
-    await frame('Sample Iron Maiden', '045/120');
-    await frame('Sample Iron Maiden', '045/120');
+    await frame('BETA 2/20');
+    await frame('BETA 2/20');
     assert.equal(await scanCount(), before + 1, 'Duplikat unterdrückt, solange dieselbe Karte liegt');
     const rec = await lastRec();
     assert.equal(rec.productId, 900012);
-    assert.equal(rec.number, '045/120', 'vom Kartenbild gelesene Nummer');
-    assert.equal(rec.setCode, null, 'leeres Set-Kürzel → null');
+    assert.equal(rec.key, 'smb-2');
+    assert.equal(rec.number, '2/20');
+    assert.equal(rec.total, 20);
+    assert.equal(rec.setWord, 'Beta');
     assert.equal(rec.rarity, 'R');
+    assert.deepEqual(rec.matchInfo, { signals: ['Nr', 'Ges'], score: 70, lead: 70 });
   });
   await check('Stabilität: Kartenwechsel nach 2 Frames ohne dieselbe Karte, dann neue Erfassung', async () => {
     const before = await scanCount();
-    await frame('Sample Frost Oracle');
-    await frame('Sample Frost Oracle');
+    await frame('ALPHA 3/20');
+    await frame('ALPHA 3/20');
     assert.equal(await scanCount(), before, 'nach 2 fremden Frames noch keine Erfassung (erst Entsperren)');
-    await frame('Sample Frost Oracle');
-    await frame('Sample Frost Oracle');
+    await frame('ALPHA 3/20');
+    await frame('ALPHA 3/20');
     assert.equal(await scanCount(), before + 1, 'andere Karte nach Wechsel erfasst');
-    assert.equal((await lastRec()).number, null, 'keine Nummer gelesen, keine in Daten');
+    assert.equal((await lastRec()).productId, 900003);
+    assert.equal((await lastRec()).number, '3/20');
   });
   await check('Stabilität: Kartenwechsel über leere Frames entsperrt', async () => {
     await unlock();
     assert.equal(await page.evaluate(() => window.__wow.state().locked), null);
   });
   await check('Vorschläge: antippen erfasst; Preis-Ersatz Mittelpreis wird gespeichert und beschriftet', async () => {
-    await frame('Sample Ember');
+    // Nummer ohne Set-Wort, Gesamtzahl 20 passt zu Alpha und Beta → zwei gleich gute Kandidaten
+    await frame('2/20');
+    await frame('2/20');
     await page.waitForSelector('#suggest:not([hidden]) .chip');
-    const chips = await page.$$('#chips .chip');
-    assert.ok(chips.length >= 1 && chips.length <= 6);
-    assert.match(await chips[0].textContent(), /Sample Ember Warden/);
-    assert.match(await chips[0].textContent(), /SAMPLE Set Alpha/);
+    const chips = await page.locator('#chips .chip').allTextContents();
+    assert.equal(chips.length, 2, chips.join(' | '));
+    assert.match(await page.textContent('#suggTitle'), /Unsicher/);
+    assert.ok(chips.every((t) => /70 P\./.test(t)), chips.join(' | '));
     const before = await scanCount();
-    await chips[0].click();
+    assert.equal(await scanCount(), before);
+    await page.locator('#chips .chip', { hasText: 'Sample Ember Warden' }).click();
     await page.waitForTimeout(150);
     assert.equal(await scanCount(), before + 1);
     const rec = await lastRec();
@@ -192,18 +201,18 @@ async function main() {
   await check('Mehrdeutig: Nachdruck in 2 Sets → keine Auto-Erfassung, Chips „Name · Set · Preis“', async () => {
     await unlock();
     const before = await scanCount();
-    for (let i = 0; i < 3; i++) await frame('Sample Knight of Testing');
+    for (let i = 0; i < 3; i++) await frame({ image: '/sample-data/img/900001.png' });
     assert.equal(await scanCount(), before, 'keine automatische Erfassung');
     assert.match(await page.textContent('#suggTitle'), /mehreren Sets/);
     const texts = await page.locator('#chips .chip').allTextContents();
     assert.equal(texts.length, 2);
-    assert.ok(texts.some((t) => /SAMPLE Set Alpha · 11,50/.test(t)) && texts.some((t) => /SAMPLE Set Beta · 9,20/.test(t)), texts.join(' | '));
+    assert.ok(texts.some((t) => /SAMPLE Set Alpha · #1\/20 · 11,50/.test(t)) && texts.some((t) => /SAMPLE Set Beta · #6\/20 · 9,20/.test(t)), texts.join(' | '));
     await page.screenshot({ path: path.join(SHOTS, '07-reprints.png') });
     await page.locator('#chips .chip', { hasText: 'SAMPLE Set Beta' }).click();
     await page.waitForTimeout(150);
     assert.equal(await scanCount(), before + 1);
     assert.equal((await lastRec()).productId, 900016);
-    for (let i = 0; i < 2; i++) await frame('Sample Knight of Testing');
+    for (let i = 0; i < 2; i++) await frame({ image: '/sample-data/img/900001.png' });
     assert.equal(await scanCount(), before + 1, 'nach Auswahl gesperrt');
   });
   await check('Set-Filter: nur ein Druck im gewählten Set → Auto-Erfassung; gespeichert', async () => {
@@ -212,8 +221,8 @@ async function main() {
     assert.equal(await page.evaluate(() => localStorage.getItem('wowscan.setFilter')), '"SAMPLE Set Alpha"');
     assert.match(await page.textContent('#dataInfo'), /Set-Filter: SAMPLE Set Alpha/);
     const before = await scanCount();
-    await frame('Sample Knight of Testing');
-    await frame('Sample Knight of Testing');
+    await frame({ image: '/sample-data/img/900001.png' });
+    await frame({ image: '/sample-data/img/900001.png' });
     assert.equal(await scanCount(), before + 1);
     assert.equal((await lastRec()).productId, 900001);
     const m = await page.evaluate(() => window.__wow.testMatch('Sample Iron Maiden'));
@@ -223,7 +232,7 @@ async function main() {
     await unlock();
     await page.evaluate(() => window.__wow.setFilter('SAMPLE Set Beta'));
     const before = await scanCount();
-    for (let i = 0; i < 3; i++) await frame('Sample Ghost Lantern');
+    for (let i = 0; i < 3; i++) await frame({ image: '/sample-data/img/900011.png' });
     assert.equal(await scanCount(), before);
     assert.equal(await page.locator('#chips .chip').count(), 2);
   });
@@ -246,8 +255,8 @@ async function main() {
   const testImage = (pid, opts = {}) => page.evaluate(([u, o]) => window.__wow.testImage(u, o), [typeof pid === 'number' ? img(pid) : pid, opts]);
   await check('Bild: hashes.json geladen, Nachdrucke zu Gruppen zusammengefasst, Infozeile', async () => {
     const st = await page.evaluate(() => window.__wow.artState());
-    assert.deepEqual(st, { groups: 22, products: 25, imgMax: 70 });
-    assert.match(await page.textContent('#dataInfo'), /Abgleich per Bild \(25 Bilder\), Namen englisch/);
+    assert.deepEqual(st, { groups: 24, products: 28, imgMax: 70 });
+    assert.match(await page.textContent('#dataInfo'), /Erkennung: Set\+Nummer, Werte, Bild \(28\), Name/);
   });
   await check('Bild: artHash im Browser identisch zu Python (hashes.json)', async () => {
     const doc = await (await fetch(`http://127.0.0.1:${PORT}/sample-data/hashes.json`)).json();
@@ -301,7 +310,7 @@ async function main() {
     const texts = await page.locator('#chips .chip').allTextContents();
     assert.equal(texts.length, 2);
     assert.ok(texts.some((t) => /SAMPLE Set Alpha/.test(t)) && texts.some((t) => /SAMPLE Set Beta/.test(t)), texts.join(' | '));
-    assert.ok(texts.every((t) => /Δ \d+/.test(t)), texts.join(' | '));
+    assert.ok(texts.every((t) => /\d+ P\./.test(t)), texts.join(' | '));
     await page.screenshot({ path: path.join(SHOTS, '08-image-reprints.png') });
   });
   await check('Bild: Set-Filter löst Nachdruck auf → Auto-Erfassung', async () => {
@@ -349,11 +358,181 @@ async function main() {
     assert.equal(await page.inputValue('#calImgS'), '70');
     await tab(page, 'scan');
   });
+
+  /* ---------- Kombinierte Erkennung (docs/CARD_ID.md) ---------- */
+  const HULOK = { strip: 'BETRAYER 163/264', cost: '2', atk: '2', hp: '2', name: 'Hulok Wegbereiter' };
+  await check('Kombiniert: Set+Nummer exakt + Werte + deutscher Name → Erfassung mit allen Feldern, Name gelernt', async () => {
+    await unlock();
+    const before = await scanCount();
+    const r = await frame(HULOK);
+    assert.equal(r.cand[0].k, 'sotb-163');
+    assert.equal(r.cand[0].pts, 100, r.cand[0].sig);   // 60 + 10 + 3·10
+    assert.equal(r.cand[1].k, 'p900032', 'Variante (LOOT) gleich gut, Grundprodukt gewählt');
+    assert.equal(r.sure, true);
+    await frame(HULOK);
+    assert.equal(await scanCount(), before + 1);
+    const rec = await lastRec();
+    assert.equal(rec.key, 'sotb-163');
+    assert.equal(rec.productId, 900031);
+    assert.equal(rec.name, 'Hulok Trailblazer');
+    assert.equal(rec.nameDe, 'Hulok Wegbereiter');
+    assert.equal(rec.number, '163/264');
+    assert.equal(rec.total, 264);
+    assert.equal(rec.setWord, 'Betrayer');
+    assert.equal(rec.set, 'Servants of the Betrayer');
+    assert.deepEqual([rec.cost, rec.atk, rec.hp, rec.health], [2, 2, 2, 2]);
+    assert.deepEqual([rec.type, rec.faction, rec.race, rec.cls], ['Ally', 'Horde', 'Tauren', 'Druid']);
+    assert.deepEqual(rec.matchInfo, { signals: ['Nr', 'Ges', 'cost', 'atk', 'hp', 'Basis'], score: 100, lead: 60 });   // vor Roke: 40 + 10 + 10 + 10 − 30
+    assert.equal(rec.price, 0.23);                 // 0,25 USD · 0,92
+    assert.deepEqual(await page.evaluate(() => window.__wow.learned()), { 'Hulok Wegbereiter': 'sotb-163' });
+    assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('wowscan.learnedNames'))), { 'Hulok Wegbereiter': 'sotb-163' });
+    const last = await page.textContent('#last');
+    assert.match(last, /Hulok Wegbereiter \(Hulok Trailblazer\)/);
+    assert.match(last, /Servants of the Betrayer · #163\/264 · Common/);
+    assert.match(last, /Ally · Kosten 2 · 2\/2 · Tauren · Druid · Horde/);
+    assert.match(await page.textContent('#recent'), /Hulok Wegbereiter \(Hulok Trailblazer\)/);
+    assert.match(await page.textContent('#dataInfo'), /1 deutsche gelernt/);
+    await page.locator('#last').screenshot({ path: path.join(SHOTS, '10-combined.png') });
+  });
+  await check('Variante: Grundprodukt automatisch, „Variante ändern“ tauscht den Eintrag (löschen + neu anlegen)', async () => {
+    const before = await scanCount();
+    const old = await lastRec();
+    assert.equal(old.key, 'sotb-163');
+    const chip = page.locator('#last [data-var]');
+    assert.equal(await chip.count(), 1);
+    assert.match(await chip.textContent(), /Variante ändern: Hulok Trailblazer \(LOOT\)/);
+    await chip.click();
+    await page.waitForFunction(() => document.querySelector('#last h3').textContent.includes('(LOOT)'));
+    await page.waitForTimeout(150);
+    assert.equal(await scanCount(), before, 'ersetzt, nicht zusätzlich');
+    const scans = (await api('GET', '/api/scans')).body;
+    assert.ok(!scans.some((x) => x.id === old.id), 'alter Eintrag gelöscht');
+    const rec = scans.at(-1);
+    assert.equal(rec.key, 'p900032');
+    assert.equal(rec.productId, 900032);
+    assert.equal(rec.name, 'Hulok Trailblazer (LOOT)');
+    assert.equal(rec.nameDe, 'Hulok Wegbereiter');
+    assert.equal(rec.number, '163/264');
+    assert.equal(rec.qty, old.qty);
+    assert.equal(rec.price, 2.76);                 // 3,00 USD · 0,92
+    assert.ok(rec.matchInfo.signals.includes('Variante'));
+    assert.match(await page.textContent('#last'), /Hulok Wegbereiter \(Hulok Trailblazer \(LOOT\)\)/);
+    // zurück zum Grundprodukt
+    await page.locator('#last [data-var]').click();
+    await page.waitForFunction(() => !document.querySelector('#last h3').textContent.includes('(LOOT)'));
+    assert.equal((await lastRec()).key, 'sotb-163');
+    assert.equal(await scanCount(), before);
+    assert.deepEqual(await page.evaluate(() => window.__wow.learned()), { 'Hulok Wegbereiter': 'sotb-163' });
+  });
+  await check('Kombiniert: OCR liest 153 statt 163 → die Werte korrigieren die Ziffer, Erfassung', async () => {
+    await unlock();
+    const before = await scanCount();
+    const misread = { strip: 'BETRAYER 153/264', cost: '2', atk: '2', hp: '2' };
+    const r = await frame(misread, { feed: false });
+    const pts = Object.fromEntries(r.cand.map((c) => [c.k, c.pts]));
+    assert.equal(pts['sotb-153'], 60, 'Roke: 60 + 10 + 10 + 10 − 30');
+    assert.equal(pts['sotb-163'], 80, 'Hulok: 40 (Ziffernkorrektur 5→6) + 10 + 3·10');
+    assert.equal(r.cand[0].k, 'sotb-163');
+    assert.equal(r.lead, 20);
+    assert.equal(r.sure, true);
+    await frame(misread);
+    assert.equal(await scanCount(), before);
+    await frame(misread);
+    assert.equal(await scanCount(), before + 1);
+    assert.equal((await lastRec()).key, 'sotb-163');
+  });
+  await check('Kombiniert: gelernter deutscher Name (+40) löst den Nummern-Lesefehler', async () => {
+    await unlock();
+    const before = await scanCount();
+    const f = { strip: 'BETRAYER 153/264', cost: '2', atk: '2', hp: '2', name: 'Hulok Wegbereitcr' };   // OCR-Fehler im Namen
+    const r = await frame(f, { feed: false });
+    assert.equal(r.cand[0].k, 'sotb-163');
+    assert.equal(r.cand[0].pts, 120, r.cand[0].sig);   // 40 + 10 + 30 + 40
+    assert.match(r.cand[0].sig, /DE/);
+    assert.equal(r.sure, true);
+    await frame(f);
+    await frame(f);
+    assert.equal(await scanCount(), before + 1);
+    assert.equal((await lastRec()).key, 'sotb-163');
+    assert.equal(Object.keys(await page.evaluate(() => window.__wow.learned())).length, 1, 'unscharf erkannter Name wird nicht doppelt gelernt');
+  });
+  await check('Kombiniert: Set-Wort unscharf; nur Gesamtzahl ohne Set-Wort löst das Set auf; gleiche Gesamtzahl → Vorschläge', async () => {
+    const a = await frame('BETRAYFR 153/264', { feed: false });
+    assert.equal(a.cand[0].k, 'sotb-153');
+    assert.equal(a.sure, true);
+    const b = await frame('153/264', { feed: false });
+    assert.equal(b.cand[0].k, 'sotb-153');
+    assert.equal(b.cand[0].pts, 70);
+    assert.equal(b.sure, true);
+    const c = await frame('7/20', { feed: false });
+    assert.deepEqual(c.cand.slice(0, 2).map((x) => x.k).sort(), ['sma-7', 'smb-7']);
+    assert.deepEqual(c.cand.slice(0, 2).map((x) => x.pts), [70, 70]);
+    assert.ok(c.cand.slice(2).every((x) => x.pts === 50), 'Ziffernkorrektur 7→1: 40 + 10');
+    assert.equal(c.sure, false);
+    const d = await frame('ALPHA 7/20', { feed: false });
+    assert.equal(d.cand[0].k, 'sma-7');
+    assert.equal(d.sure, true);
+    await unlock();
+    const before = await scanCount();
+    await frame('153/264');
+    await frame('153/264');
+    assert.equal(await scanCount(), before + 1);
+    assert.equal((await lastRec()).name, 'Roke the Ice Baron');
+  });
+  await check('Kombiniert: Karte ohne TCGplayer-Produkt wird erkannt und mit „kein Preis“ gespeichert', async () => {
+    await unlock();
+    const before = await scanCount();
+    await frame('BETRAYER 200/264');
+    await frame('BETRAYER 200/264');
+    assert.equal(await scanCount(), before + 1);
+    const rec = await lastRec();
+    assert.equal(rec.key, 'sotb-200');
+    assert.equal(rec.productId, null);
+    assert.equal(rec.price, null);
+    assert.equal(rec.priceUsd, null);
+    assert.equal(rec.number, '200/264');
+    const last = await page.textContent('#last');
+    assert.match(last, /kein Preis/);
+    assert.match(last, /Kein TCGplayer-Produkt/);
+  });
+  await check('Kombiniert: Export enthält nameDe, Schlüssel und Erkennung', async () => {
+    const csv = await page.evaluate(() => window.__wow.csv());
+    const lines = csv.replace(/^﻿/, '').trim().split('\r\n');
+    const head = lines[0].split(';');
+    for (const h of ['Name (deutsch)', 'Schlüssel', 'Rasse', 'Erkennung']) assert.ok(head.includes(h), h);
+    const row = lines.find((l) => l.includes('Hulok Wegbereiter'));
+    assert.ok(row, 'Zeile mit deutschem Namen');
+    assert.match(row, /sotb-163/);
+    assert.match(row, /Nr Ges cost atk hp Basis( Variante)* = 100/);
+    const js = JSON.parse(await page.evaluate(() => window.__wow.json()));
+    assert.ok(js.scans.some((x) => x.nameDe === 'Hulok Wegbereiter' && x.key === 'sotb-163'));
+  });
+  await check('Gelernte Namen: Export als JSON-Datei, Import führt zusammen', async () => {
+    await tab(page, 'set');
+    assert.match(await page.textContent('#learnInfo'), /1 gelernte/);
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#btnLearnExp')]);
+    const data = JSON.parse(fs.readFileSync(await dl.path(), 'utf8'));
+    assert.deepEqual(data, { version: 1, names: { 'Hulok Wegbereiter': 'sotb-163' } });
+    await page.setInputFiles('#learnFile', { name: 'namen.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ version: 1, names: { 'Roke der Eisbaron': 'sotb-153' } })) });
+    await page.waitForFunction(() => Object.keys(window.__wow.learned()).length === 2);
+    assert.match(await page.textContent('#learnInfo'), /2 gelernte/);
+    assert.match(await page.evaluate(() => window.__wow.importLearned('kein json')), /fehlgeschlagen/);
+    await tab(page, 'scan');
+    const r = await frame({ name: 'Roke der Eisbaron', cost: '2', atk: '2', hp: '1' }, { feed: false });
+    assert.equal(r.cand[0].k, 'sotb-153');
+    assert.equal(r.cand[0].pts, 70, r.cand[0].sig);   // gelernter Name 40 + 3·10
+    assert.equal(r.sure, true);
+    await unlock();
+    const before = await scanCount();
+    for (let i = 0; i < 2; i++) await frame({ name: 'Roke der Eisbaron', cost: '2', atk: '2', hp: '1' });
+    assert.equal(await scanCount(), before + 1, 'gelernter Name + Werte erfassen');
+    assert.equal((await lastRec()).key, 'sotb-153');
+  });
   await check('Namenszusatz: "Sample Lucky Longshot" erfasst die (LOOT)-Karte, voller Name angezeigt', async () => {
     await unlock();
     const before = await scanCount();
-    await frame('Sample Lucky Longshot');
-    await frame('Sample Lucky Longshot');
+    await frame('LOOT 1/12');
+    await frame('LOOT 1/12');
     assert.equal(await scanCount(), before + 1);
     const rec = await lastRec();
     assert.equal(rec.name, 'Sample Lucky Longshot (LOOT)');
@@ -362,7 +541,7 @@ async function main() {
     const recent = await page.textContent('#recent');
     assert.match(recent, /Sample Lucky Longshot \(LOOT\)/);
     assert.doesNotMatch(recent, /#null|#undefined|· ·/);
-    assert.match(await page.textContent('#last'), /SAMPLE Loot Promos · L/);
+    assert.match(await page.textContent('#last'), /SAMPLE Loot Promos · #1\/12 · L/);
   });
 
   /* ---------- Preise ---------- */
@@ -449,12 +628,12 @@ async function main() {
     await page.waitForSelector('#dlg[open]');
     const body = await page.textContent('#dlgBody');
     assert.match(body, /TCGplayer-Preis \(US\), Mittelpreis \(kein Marktpreis verfügbar\), umgerechnet, Stand 25\.10\.2026/);
-    assert.match(body, /SAMPLE Set Alpha · Uncommon/);
-    assert.doesNotMatch(body, /#/);
+    assert.match(body, /SAMPLE Set Alpha · #2\/20 · Uncommon · Ally · Kosten 3 · 2\/3/);
+    assert.doesNotMatch(body, /#null|#undefined|· ·/);
     await page.click('#dlg button[value=cancel]');
     await page.fill('#q', 'crystal golem');
     await page.waitForTimeout(250);
-    assert.match(await page.textContent('#results'), /SAMPLE Set Alpha · #12\/100 · Rare/);
+    assert.match(await page.textContent('#results'), /SAMPLE Set Alpha · #13\/20 · Rare/);
   });
   await check('Suche: Holofoil-Produkt speichert foil=true und Holofoil-Preis', async () => {
     await page.fill('#q', 'moon holo');
@@ -493,9 +672,10 @@ async function main() {
     assert.equal(rec.ocrConfidence, null);
     assert.equal(rec.price, 0.55);               // 0,60 * 0,92 = 0,552
     assert.equal(rec.priceUsd, 0.6);
-    assert.equal(rec.number, null);
-    assert.equal(rec.setCode, null);
-    assert.equal(rec.type, null);
+    assert.equal(rec.number, '5/20', 'Nummer aus cards.json v2');
+    assert.equal(rec.setCode, 'Beta');
+    assert.equal(rec.type, 'Ally');
+    assert.equal(rec.nameDe, null, 'über die Suche: kein deutscher Name');
     assert.equal(await page.isVisible('#dlg[open]'), false);
   });
 
@@ -538,7 +718,7 @@ async function main() {
     const text = buf.toString('utf8').replace(/^﻿/, '');
     const lines = text.split(/\r\n/).filter(Boolean);
     const cols = lines[0].split(';').length;
-    assert.equal(cols, 26, 'Spaltenanzahl Kopf');
+    assert.equal(cols, 30, 'Spaltenanzahl Kopf');
     assert.match(lines[0], /^id;Zeitstempel;Name;/);
     for (const l of lines.slice(1)) assert.equal(l.split(';').length, cols, 'Zeile: ' + l);
     assert.match(text, /Sample Bone Drake/);
@@ -585,7 +765,7 @@ async function main() {
   });
   await check('Einstellungen wirken: neue Erfassung in CHF, Preis Tiefstpreis', async () => {
     // Vorherige Karte (Ember Warden) ist noch gesperrt: 1. Frame zählt als fremd, 2. entsperrt, 3. erfasst
-    for (let i = 0; i < 3; i++) await page.evaluate(() => window.__wow.frame('Sample Sun Hermit', '004/80'));
+    for (let i = 0; i < 3; i++) await page.evaluate(() => window.__wow.frame({ strip: 'BETA 4/20' }));
     const rec = (await api('GET', '/api/scans')).body.at(-1);
     assert.equal(rec.name, 'Sample Sun Hermit');
     assert.equal(rec.currency, 'CHF');
@@ -631,29 +811,39 @@ async function main() {
 
   await check('Kalibrierung: Regler verschiebt Rahmen, Debug-Ansicht schaltbar', async () => {
     await tab(page, 'set');
-    await setRange(page, '#calNameS', 5);
+    await page.selectOption('#calReg', 'name');
+    await setRange(page, '#calYS', 5);
     const v = await page.evaluate(() => JSON.parse(localStorage.getItem('wowscan.calib')));
-    assert.equal(v.nameOff, 5);
+    assert.deepEqual(v.off.name, [0, 5]);
+    await page.selectOption('#calReg', 'hp');
+    await setRange(page, '#calXS', -3);
+    assert.deepEqual((await page.evaluate(() => JSON.parse(localStorage.getItem('wowscan.calib')))).off.hp, [-3, 0]);
+    assert.equal(await page.textContent('#calXV'), '-3');
     await page.check('#calDbg');
     await tab(page, 'scan');
     await page.click('#btnScan');
     await page.waitForFunction(() => document.querySelector('#video').videoWidth > 0, null, { timeout: 8000 });
     await page.waitForTimeout(200);
-    const top1 = await page.evaluate(() => parseFloat(document.querySelector('#boxName').style.top));
-    assert.equal(await page.isVisible('#boxName'), true);
+    const top1 = await page.evaluate(() => parseFloat(document.querySelector('#box-name').style.top));
+    for (const r of ['name', 'strip', 'cost', 'atk', 'hp']) assert.equal(await page.isVisible('#box-' + r), true, r);
     assert.equal(await page.isVisible('#dbg'), true);
-    assert.equal(await page.isVisible('#cvName'), true);
+    assert.equal(await page.isVisible('#cv-strip'), true);
     await page.evaluate(() => window.__wow.testImage('/sample-data/img/900003.png', { feed: false }));
     assert.equal(await page.isVisible('#cvArt'), true);
     assert.ok(await page.evaluate(() => document.querySelector('#cvArt').width) > 100);
     const dt = await page.textContent('#dbgTxt');
     assert.match(dt, /Bild: Treffer · beste Distanz \d+/);
     assert.match(dt, /1\. Sample Frost Oracle.*\n  2\. .*\n  3\. /);
+    await page.evaluate(() => window.__wow.frame({ strip: 'BETRAYER 163/264', cost: '2', hp: '2' }, { feed: false }));
+    assert.equal(await page.textContent('#raw-strip'), '„BETRAYER 163/264“');
+    assert.equal(await page.textContent('#raw-cost'), '„2“');
+    assert.match(await page.textContent('#dbgTxt'), /1\. Hulok Trailblazer · Servants of the Betrayer #163\/264: Nr Ges cost hp Basis = 90/);
     await tab(page, 'set');
-    await setRange(page, '#calNameS', -5);
+    await page.selectOption('#calReg', 'name');
+    await setRange(page, '#calYS', -5);
     await tab(page, 'scan');
     await page.waitForTimeout(100);
-    const top2 = await page.evaluate(() => parseFloat(document.querySelector('#boxName').style.top));
+    const top2 = await page.evaluate(() => parseFloat(document.querySelector('#box-name').style.top));
     assert.ok(top2 < top1, `Rahmen nicht verschoben: ${top1} → ${top2}`);
     await page.screenshot({ path: path.join(SHOTS, '06-calibration.png') });
     await tab(page, 'set');
@@ -664,7 +854,8 @@ async function main() {
     await page.waitForTimeout(150);
     await tab(page, 'set');
     await page.click('#calReset');
-    assert.equal(await page.inputValue('#calNameS'), '0');
+    assert.equal(await page.inputValue('#calYS'), '0');
+    assert.deepEqual((await page.evaluate(() => JSON.parse(localStorage.getItem('wowscan.calib')))).off.hp, [0, 0]);
   });
 
 
@@ -722,7 +913,7 @@ async function main() {
     await p2.evaluate(() => window.__wow.ready);
     await p2.waitForSelector('#banner .banner.warn');
     assert.match(await p2.textContent('#banner'), /Offline: gecachte Daten/);
-    assert.match(await p2.textContent('#dataInfo'), /26 Karten/);
+    assert.match(await p2.textContent('#dataInfo'), /30 Karten/);
     await p2.close();
   });
 
@@ -737,7 +928,7 @@ async function main() {
     await p3.evaluate(() => window.__wow.ready);
     await p3.waitForTimeout(300);
     assert.match(await p3.textContent('#espPill'), /nicht erreichbar/);
-    assert.match(await p3.textContent('#dataInfo'), /26 Karten/);
+    assert.match(await p3.textContent('#dataInfo'), /30 Karten/);
     await p3.click('.tab[data-view="coll"]');
     assert.match(await p3.textContent('#scanList'), /Noch keine Scans|Sammlung|Karten/);
     await ctx2.close();
@@ -769,6 +960,27 @@ async function main() {
     await ctx4.close();
   });
 
+
+  /* ---------- cards.json Version 1 (ohne sets, Nummer als Text) ---------- */
+  await check('Kompatibilität: cards.json v1 wird weiter geladen', async () => {
+    const c7 = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    const v1 = fs.readFileSync(path.join(__dirname, 'sample-data', 'cards-v1.json'), 'utf8');
+    await c7.route('**/sample-data/cards.json', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: v1 }));
+    await c7.route('https://cdn.jsdelivr.net/**', (r) => r.abort());
+    const p = await openApp(c7);
+    assert.match(await p.textContent('#dataInfo'), /26 Karten/);
+    assert.equal((await p.evaluate(() => window.__wow.state())).indexed, 26);
+    const img = await p.evaluate(() => window.__wow.testImage('/sample-data/img/900003.png', { feed: false }));
+    assert.equal(img.ok, true);
+    assert.equal(img.cand[0].k, 'p900003');
+    const n = await p.evaluate(() => window.__wow.frame({ strip: 'SMA 12/100' }, { feed: false }));
+    assert.equal(n.cand[0].pid, 900022, 'v1-Nummer "12/100" und Set-Kürzel SMA');
+    assert.equal(n.sure, true);
+    assert.equal((await p.evaluate(() => window.__wow.testMatch('Sample Knight of Testing'))).top.printings.length, 2);
+    assert.deepEqual(p.errors, []);
+    await c7.close();
+  });
+
   /* ---------- Großer Kartenbestand: Abgleichszeit ---------- */
   await check('Performance: 10.000 Karten, Abgleich im Schnitt < 50 ms', async () => {
     const ctx5 = await browser.newContext({ viewport: { width: 390, height: 844 } });
@@ -784,6 +996,14 @@ async function main() {
     const max = Math.max(...times);
     console.log(`  Index ${st.indexMs} ms, Abgleich Ø ${avg.toFixed(1)} ms, max ${max.toFixed(1)} ms`);
     assert.ok(avg < 50, 'Durchschnitt ' + avg);
+    // Kombinierte Bewertung (Nummer, Werte, Name) auf dem großen Bestand
+    const fms = await p6.evaluate(async () => {
+      const t0 = performance.now();
+      for (let i = 0; i < 20; i++) await window.__wow.frame({ strip: `SBS ${(i % 300) + 1}/300`, cost: '2', atk: '3', hp: '1', name: 'Storm Hownd' }, { feed: false });
+      return (performance.now() - t0) / 20;
+    });
+    console.log(`  Kombinierte Bewertung Ø ${fms.toFixed(1)} ms je Frame`);
+    assert.ok(fms < 30, 'Frame ' + fms);
     await ctx5.close();
   });
 
