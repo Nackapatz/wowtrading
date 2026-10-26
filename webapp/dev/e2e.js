@@ -885,6 +885,72 @@ async function main() {
     } finally { await b2.close(); }
   });
 
+  // Foto mit Sample-Karte auf braunem Grund (Karte füllt frac der Fotohöhe), als JPEG-Datei
+  const makePhoto = (pid, frac, w = 1200, h = 1600) => page.evaluate(async ([u, f, w, h]) => {
+    const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    const c = cv.getContext('2d'); c.fillStyle = '#6b5a44'; c.fillRect(0, 0, w, h);
+    if (u) {
+      const i = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = u; });
+      const ch = h * f, cw = ch * 400 / 558; c.drawImage(i, (w - cw) / 2, (h - ch) / 2, cw, ch);
+    }
+    return cv.toDataURL('image/jpeg', 0.9).split(',')[1];
+  }, [pid ? img(pid) : null, frac, w, h]).then((b64) => ({ name: 'foto.jpg', mimeType: 'image/jpeg', buffer: Buffer.from(b64, 'base64') }));
+  const photoDone = () => page.waitForFunction(() => !document.querySelector('#btnPhoto').disabled && /Erkannt|keine Karte|unsicher/.test(document.querySelector('#live').textContent), null, { timeout: 15000 });
+
+  await check('Foto scannen: Karte auf Hoch- und Querformat-Foto wird erfasst, leeres Foto nicht', async () => {
+    await page.evaluate(() => window.__wow.setFilter(''));
+    let before = await scanCount();
+    await page.setInputFiles('#photoIn', await makePhoto(900003, 0.8));
+    await photoDone();
+    assert.equal(await scanCount(), before + 1);
+    assert.equal((await lastRec()).productId, 900003);
+    assert.equal(await page.isVisible('#photo'), true);
+    before = await scanCount();
+    await page.setInputFiles('#photoIn', await makePhoto(900005, 0.9, 1600, 1200));
+    await photoDone();
+    assert.equal(await scanCount(), before + 1);
+    assert.equal((await lastRec()).productId, 900005);
+    before = await scanCount();
+    await page.setInputFiles('#photoIn', await makePhoto(null));
+    await photoDone();
+    assert.equal(await scanCount(), before);
+    assert.match(await page.textContent('#live'), /keine Karte/);
+    assert.deepEqual(page.errors, []);
+  });
+
+  await check('Blitz: Knopf schaltet torch, wird gemerkt; ohne torch ausgegraut', async () => {
+    await page.evaluate(() => {
+      window.__torchCalls = [];
+      navigator.mediaDevices.getUserMedia = async () => {
+        const cv = document.createElement('canvas'); cv.width = 640; cv.height = 480;
+        cv.getContext('2d').fillRect(0, 0, 640, 480);
+        const s = cv.captureStream(10), t = s.getVideoTracks()[0];
+        t.getCapabilities = () => (window.__noTorch ? {} : { torch: true });
+        t.applyConstraints = async (x) => { window.__torchCalls.push(x.advanced[0].torch); };
+        return s;
+      };
+    });
+    await page.click('#btnScan');
+    await page.waitForSelector('#btnTorch:not([hidden])');
+    assert.equal(await page.textContent('#btnTorch'), 'Blitz an');
+    await page.click('#btnTorch');
+    assert.equal(await page.textContent('#btnTorch'), 'Blitz aus');
+    await page.click('#btnScan');
+    assert.equal(await page.isHidden('#btnTorch'), true);
+    await page.click('#btnScan');
+    await page.waitForFunction(() => document.querySelector('#btnTorch').textContent === 'Blitz aus');
+    await page.click('#btnTorch');
+    assert.deepEqual(await page.evaluate(() => window.__torchCalls), [true, true, false]);
+    await page.click('#btnScan');
+    await page.evaluate(() => { window.__noTorch = true; });
+    await page.click('#btnScan');
+    await page.waitForSelector('#btnTorch:not([hidden])');
+    assert.equal(await page.textContent('#btnTorch'), 'Blitz nicht verfügbar');
+    assert.equal(await page.isDisabled('#btnTorch'), true);
+    await page.click('#btnScan');
+    assert.deepEqual(page.errors, []);
+  });
+
   /* ---------- Layout bei 390 px ---------- */
   await check('Layout: kein horizontaler Seitenscroll in allen Ansichten (390 px)', async () => {
     for (const v of ['scan', 'search', 'coll', 'set']) {

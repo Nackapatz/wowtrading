@@ -25,6 +25,7 @@
 
     <div id="cam" class="cam">
       <video id="video" playsinline muted hidden></video>
+      <img id="photo" class="photo" alt="Gewähltes Foto" hidden>
       <div id="guide" class="guide" aria-hidden="true" hidden></div>
       <div id="boxArt" class="cal-box art" aria-hidden="true" hidden><span>Bild</span></div>
       <div id="camMsg" class="cam-msg">Kamera aus. Tippe auf „Scan starten“, um die Kartenerkennung zu starten.</div>
@@ -39,6 +40,11 @@
     </div>
 
     <button id="btnScan" class="btn primary big" type="button" aria-pressed="false">Scan starten</button>
+    <div class="actions">
+      <button id="btnPhoto" class="btn" type="button">Foto scannen</button>
+      <button id="btnTorch" class="btn" type="button" aria-pressed="false" hidden>Blitz an</button>
+    </div>
+    <input id="photoIn" type="file" accept="image/*" hidden>
     <label class="switch"><input type="checkbox" id="scanFoil"><span>Foil erfassen</span></label>
     <label class="field"><span>Set-Filter (Abgleich und Suche nur in diesem Set)</span>
       <select id="setFilter"><option value="">Alle Sets</option></select></label>

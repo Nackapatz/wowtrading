@@ -82,6 +82,7 @@ strong { color: var(--text); }
   display: flex; align-items: center; justify-content: center;
 }
 .cam video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.cam .photo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .guide {
   position: absolute; border: 2px solid var(--gold-hi); border-radius: 10px;
   box-shadow: 0 0 0 999px rgba(0, 0, 0, .45), 0 0 18px #d6aa4566; pointer-events: none;

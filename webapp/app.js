@@ -943,6 +943,7 @@ async function startScan() {
     });
   } catch (e) { camMsg(camErrText(e), true); return; }
   S.stream = stream;
+  hidePhoto();
   video.srcObject = stream;
   video.hidden = false;
   camMsg('');
@@ -959,6 +960,7 @@ async function startScan() {
   layoutGuide();
   renderDbg();
   keepAwake(true);
+  initTorch();
   S.ocrFailed = false;
   setBanner('ocr', '', '');
   ocrUsable('eng');   // Nummer und Werte: Texterkennung im Hintergrund laden
@@ -985,6 +987,8 @@ function stopScan() {
   S.locked = null; S.streak = 0; S.streakPid = null;
   if (S.stream) S.stream.getTracks().forEach((t) => t.stop());
   S.stream = null;
+  S.torch = false;
+  renderTorch(false);
   const v = $('#video');
   v.srcObject = null; v.hidden = true;
   $('#guide').hidden = true;
@@ -995,6 +999,126 @@ function stopScan() {
   hideSuggest();
   camMsg('Kamera aus. Tippe auf „Scan starten“, um die Kartenerkennung zu starten.');
   keepAwake(false);
+}
+
+/* Blitz (Taschenlampe der Rückkamera). Nur wenn der Browser „torch“ meldet (Chrome Android);
+ * sonst bleibt der Knopf ausgegraut. Der Wunsch wird gemerkt und beim nächsten Start wieder gesetzt. */
+function videoTrack() { return S.stream ? S.stream.getVideoTracks()[0] || null : null; }
+function torchSupported() {
+  const t = videoTrack();
+  try { return !!(t && t.getCapabilities && t.getCapabilities().torch); } catch { return false; }
+}
+function renderTorch(show) {
+  const b = $('#btnTorch'), ok = show && torchSupported();
+  b.hidden = !show;
+  b.disabled = !ok;
+  b.textContent = !ok ? 'Blitz nicht verfügbar' : S.torch ? 'Blitz aus' : 'Blitz an';
+  b.setAttribute('aria-pressed', S.torch ? 'true' : 'false');
+  b.title = ok ? '' : 'Dieser Browser kann die Kameralampe nicht schalten. Ein vorhandenes Foto lässt sich über „Foto scannen“ auswerten.';
+}
+async function setTorch(on) {
+  const t = videoTrack();
+  if (!t || !torchSupported()) return;
+  try {
+    await t.applyConstraints({ advanced: [{ torch: on }] });
+    S.torch = on;
+    S.ui.torch = on; lsSet(LS_UI, S.ui);
+  } catch (e) { toast(`Blitz konnte nicht geschaltet werden: ${e.message || e}`, 'err'); }
+  renderTorch(true);
+}
+function initTorch() {
+  S.torch = false;
+  renderTorch(true);
+  if (S.ui.torch && torchSupported()) setTorch(true);
+}
+
+/* Vorhandenes Foto scannen: Die Karte sollte das Foto möglichst füllen. Ausgewertet werden mittige
+ * Ausschnitte im Kartenformat in mehreren Größen; zuerst nur per Bildabgleich, ohne Treffer dann der
+ * beste Ausschnitt mit Texterkennung. Ein Foto ist ein Einzelbild: eindeutig → sofort erfassen,
+ * sonst Vorschläge wie beim Kamerascan. */
+const PHOTO_SCALES = [1, 0.9, 0.8, 0.7, 0.6];
+let photoUrl = null;
+function hidePhoto() {
+  const p = $('#photo');
+  p.hidden = true; p.removeAttribute('src');
+  if (photoUrl) { URL.revokeObjectURL(photoUrl); photoUrl = null; }
+}
+async function decodePhoto(file) {
+  if (self.createImageBitmap) {
+    try { return await createImageBitmap(file, { imageOrientation: 'from-image' }); } catch { /* Rückfall: <img> */ }
+  }
+  return loadImage(photoUrl);
+}
+function photoCrop(img, scale) {
+  const w = img.width, h = img.height;
+  let cw = w, ch = w * CARD_H / CARD_W;
+  if (ch > h) { ch = h; cw = h * CARD_W / CARD_H; }
+  cw *= scale; ch *= scale;
+  const cv = cardCanvas();
+  cv.getContext('2d', { willReadFrequently: true }).drawImage(img, (w - cw) / 2, (h - ch) / 2, cw, ch, 0, 0, CARD_W, CARD_H);
+  return cv;
+}
+const betterMatch = (a, b) => {
+  const p = (m) => (m.ranked[0] ? m.ranked[0].pts : -1);
+  return !b || (a.sure && !b.sure) || (a.sure === b.sure && p(a) > p(b));
+};
+async function scanPhoto(file) {
+  if (!file || S.photoBusy) return;
+  if (!S.idx) { toast('Kartendaten sind noch nicht geladen.', 'err'); return; }
+  if (S.scanning) stopScan();
+  S.photoBusy = true;
+  $('#btnPhoto').disabled = true;
+  hidePhoto();
+  hideSuggest();
+  photoUrl = URL.createObjectURL(file);
+  const prev = $('#photo');
+  prev.src = photoUrl; prev.hidden = false;
+  camMsg('');
+  setLive('Foto wird ausgewertet …');
+  try {
+    const img = await decodePhoto(file);
+    if (!img.width || !img.height) throw new Error('Foto ist leer');
+    // 1. Bildabgleich über alle Ausschnitte (schnell, keine OCR)
+    let best = null, bestScale = 1;
+    for (const sc of PHOTO_SCALES) {
+      await processCard(photoCrop(img, sc), false, {});
+      if (betterMatch(S.dbg.m, best)) { best = S.dbg.m; bestScale = sc; }
+      if (best.sure) break;
+    }
+    // 2. Ohne eindeutigen Treffer: besten Ausschnitt zusätzlich per Texterkennung lesen
+    if (!best.sure) {
+      setLive('Foto wird gelesen (Texterkennung) …');
+      S.ocrFailed = false;
+      await Promise.all([ensureOcr('eng'), ensureOcr('deu')].map((p) => p.catch(() => null)));
+      S.frameNo = 1;   // processCard liest den Namen nur in geraden Frames → dieser wird Frame 2
+      await processCard(photoCrop(img, bestScale), false);
+      if (betterMatch(S.dbg.m, best)) best = S.dbg.m;
+    }
+    if (img.close) img.close();
+    await photoResult(best);
+  } catch (e) {
+    setLive('');
+    toast(`Foto konnte nicht ausgewertet werden: ${e.message || e}`, 'err');
+  } finally {
+    S.photoBusy = false;
+    $('#btnPhoto').disabled = false;
+  }
+}
+async function photoResult(m) {
+  const c = m.ranked[0];
+  const ctx = { nameDe: m.de || null, number: m.st ? `${m.st.num}/${m.st.tot}` : null };
+  if (c && m.sure) {
+    setLive(`Erkannt: ${c.card.n}`);
+    await captureCard(c.card, { nameDe: ctx.nameDe, number: ctx.number, matchInfo: { signals: [...c.sig, 'Foto'], score: Math.round(c.pts), lead: Math.round(m.lead) } });
+    return;
+  }
+  const list = m.ranked.filter((r) => r.pts >= SUGG_MIN).slice(0, 3);
+  if (list.length) {
+    setLive(`Foto: unsicher (${Math.round(c.pts)} P.) – bitte Vorschlag wählen`);
+    showSuggest(list, 'Auf dem Foto unsicher erkannt. Tippe die richtige Karte an:', ctx);
+  } else {
+    setLive('Auf dem Foto wurde keine Karte erkannt. Tipp: Karte formatfüllend und gerade fotografieren.');
+  }
 }
 
 /* ============================================================
@@ -1416,6 +1540,13 @@ async function saveSettings(ev) {
 function bindUi() {
   $$('.tab').forEach((b) => b.addEventListener('click', () => showView(b.dataset.view)));
   $('#btnScan').addEventListener('click', () => (S.scanning ? stopScan() : startScan()));
+  $('#btnTorch').addEventListener('click', () => setTorch(!S.torch));
+  $('#btnPhoto').addEventListener('click', () => $('#photoIn').click());
+  $('#photoIn').addEventListener('change', (e) => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = '';   // dasselbe Foto erneut wählbar
+    scanPhoto(f);
+  });
   $('#scanFoil').addEventListener('change', (e) => { S.ui.foil = e.target.checked; lsSet(LS_UI, S.ui); });
   $('#last').addEventListener('click', (e) => { const b = e.target.closest('[data-var]'); if (b) switchVariant(b.dataset.var); });
   $('#chips').addEventListener('click', async (e) => {

@@ -41,6 +41,8 @@ Die Web-App kommt direkt vom Scanner. Das Gerät läuft mit HTTPS.
    - **Edge (Android):** „Erweitert“, dann „Weiter zu … (unsicher)“.
 4. Die Web-App lädt die Kartendaten (einmal, danach aus dem Cache). Erlaube den Kamerazugriff.
 5. **Scannen:** „Scan starten“ drücken und die Karte in den Rahmen halten. Erkannte Karten erscheinen in der Liste und auf dem Display. Dieselbe Karte wird nicht doppelt gezählt, solange sie im Bild bleibt. Ist die Erkennung unsicher, zeigt die App Vorschläge zum Antippen. Über die Suche trägst du Karten auch manuell ein.
+   - **Blitz:** Während der Scan läuft, schaltet „Blitz an“ die Kameralampe. Das geht nur in Browsern, die das unterstützen (Chrome auf Android); sonst steht dort „Blitz nicht verfügbar“. Die App merkt sich die Einstellung.
+   - **Foto scannen:** Wertet ein vorhandenes Foto aus der Galerie aus (oder ein neues, mit dem Blitz der Kamera-App). Die Karte sollte das Foto möglichst füllen und gerade aufgenommen sein. Eindeutig erkannte Karten werden sofort erfasst, sonst erscheinen Vorschläge.
 6. **Sammlung:** Menge ändern, Einträge löschen und Summen einsehen. Über „Export“ gibt es CSV (Semikolon, für Excel), JSON und einen Kurzbericht.
 
 Die Kartennamen sind englisch. Deutsche Kartenausgaben werden über die englischen Namen erkannt, wenn der Name sich ähnlich genug ist.
