@@ -1,0 +1,35 @@
+{
+ "algo": "dhash17x16-v1",
+ "region": [
+  0.1,
+  0.14,
+  0.9,
+  0.56
+ ],
+ "images": {
+  "fx1_gradient.png": {
+   "w": 200,
+   "h": 279,
+   "hash": "fffefff9fff3fccff81ff03ff03fe03fe03fb03f703ff87ffcffffffffffffff",
+   "color": "9a748d"
+  },
+  "fx2_shapes.png": {
+   "w": 200,
+   "h": 279,
+   "hash": "00000000600060006000600060c060c060c060c000c001c007000e001c001800",
+   "color": "546667"
+  },
+  "fx3_blocks.png": {
+   "w": 251,
+   "h": 350,
+   "hash": "c45a929af2a653269ae6b15674ea94e194cd26942c544c5c35be2799c9b38595",
+   "color": "81807e"
+  },
+  "fx4_tiny.png": {
+   "w": 15,
+   "h": 21,
+   "hash": "0100010001000100010001000100010001000100010001000100010001000100",
+   "color": "6e7191"
+  }
+ }
+}

@@ -3,7 +3,9 @@
  *   node webapp/dev/e2e.js
  * Startet den Mock-ESP im Prozess, testet Abgleich, Stabilitätsregel, Preise, Suche, Sammlung,
  * CSV/JSON/Text-Export, Einstellungen, Kamerastart (Fake-Device), Fehlerfälle und das Layout bei 390x844.
- * Tesseract-CDN wird blockiert (Sandbox), OCR selbst wird daher nicht getestet, nur der Abgleich über window.__wow. */
+ * Tesseract-CDN wird blockiert (Sandbox), OCR selbst wird daher nicht getestet, nur der Abgleich über window.__wow.
+ * Bildabgleich: Sample-Kartenbilder (sample-data/img, erzeugt von make_sample_art.py) über window.__wow.testImage
+ * und ein Fake-Kamerastream (sample-data/camera.y4m) mit einer Sample-Karte im Rahmen. */
 'use strict';
 const path = require('node:path');
 const fs = require('node:fs');
@@ -236,6 +238,115 @@ async function main() {
     await page.fill('#q', 'knight ');
     await page.waitForTimeout(250);
     assert.equal(await page.locator('#results .row-btn').count(), 2);
+    await tab(page, 'scan');
+  });
+
+  /* ---------- Bildabgleich (deutsche Karten: Illustration statt Name) ---------- */
+  const img = (pid) => `/sample-data/img/${pid}.png`;
+  const testImage = (pid, opts = {}) => page.evaluate(([u, o]) => window.__wow.testImage(u, o), [typeof pid === 'number' ? img(pid) : pid, opts]);
+  await check('Bild: hashes.json geladen, Nachdrucke zu Gruppen zusammengefasst, Infozeile', async () => {
+    const st = await page.evaluate(() => window.__wow.artState());
+    assert.deepEqual(st, { groups: 22, products: 25, imgMax: 70 });
+    assert.match(await page.textContent('#dataInfo'), /Abgleich per Bild \(25 Bilder\), Namen englisch/);
+  });
+  await check('Bild: artHash im Browser identisch zu Python (hashes.json)', async () => {
+    const doc = await (await fetch(`http://127.0.0.1:${PORT}/sample-data/hashes.json`)).json();
+    for (const pid of ['900001', '900003', '900011', '900020']) {
+      const h = await page.evaluate((u) => window.__wow.hashImage(u), img(pid));
+      assert.deepEqual([h.hash, h.color], doc.hashes[pid], 'Produkt ' + pid);
+    }
+  });
+  await check('Bild: Kartenbild wird eindeutig erkannt (< 30 ms, ohne OCR)', async () => {
+    for (const pid of [900003, 900002, 900019, 900008]) {
+      const r = await testImage(pid, { feed: false });
+      assert.equal(r.ok, true, `Produkt ${pid}: ${JSON.stringify(r)}`);
+      assert.equal(r.best.pid, pid);
+      assert.equal(r.via, 'Bild');
+      assert.ok(r.best.d <= 20, 'Distanz ' + r.best.d);
+      assert.ok(r.margin >= 12, 'Abstand ' + r.margin);
+      assert.ok(r.ms < 30, 'Zeit ' + r.ms);
+    }
+  });
+  await check('Bild: 2 gleiche Frames erfassen genau einmal', async () => {
+    await unlock();
+    const before = await scanCount();
+    await testImage(900003);
+    assert.equal(await scanCount(), before, '1 Frame erfasst nicht');
+    await testImage(900003);
+    assert.equal(await scanCount(), before + 1);
+    const rec = await lastRec();
+    assert.equal(rec.productId, 900003);
+    assert.ok(rec.ocr == null, 'keine OCR-Konfidenz bei Bildtreffer');
+    await testImage(900003);
+    assert.equal(await scanCount(), before + 1, 'gesperrt');
+  });
+  await check('Bild: Abweichungen (Helligkeit, Unschärfe, Versatz, Skalierung) werden toleriert', async () => {
+    const cases = [{ filter: 'brightness(1.2)' }, { filter: 'brightness(0.8) contrast(1.1)' }, { filter: 'blur(1.5px)' }, { shift: 6 }, { scale: 0.97 }, { filter: 'saturate(0.7) blur(1px)', shift: -4, scale: 1.02 }];
+    for (const c of cases) {
+      const r = await testImage(900005, { ...c, feed: false });
+      assert.equal(r.best.pid, 900005, JSON.stringify(c));
+      assert.equal(r.ok, true, `${JSON.stringify(c)}: d=${r.best.d}, Abstand ${r.margin}`);
+    }
+  });
+  await check('Bild: Nachdruck (gleiche Illustration) → keine Auto-Erfassung, Chips mit beiden Sets', async () => {
+    await unlock();
+    const before = await scanCount();
+    const r = await testImage(900001);
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.best.printings.sort(), [900001, 900016]);
+    await testImage(900001);
+    await testImage(900001);
+    assert.equal(await scanCount(), before);
+    assert.match(await page.textContent('#suggTitle'), /mehreren Sets/);
+    const texts = await page.locator('#chips .chip').allTextContents();
+    assert.equal(texts.length, 2);
+    assert.ok(texts.some((t) => /SAMPLE Set Alpha/.test(t)) && texts.some((t) => /SAMPLE Set Beta/.test(t)), texts.join(' | '));
+    assert.ok(texts.every((t) => /Δ \d+/.test(t)), texts.join(' | '));
+    await page.screenshot({ path: path.join(SHOTS, '08-image-reprints.png') });
+  });
+  await check('Bild: Set-Filter löst Nachdruck auf → Auto-Erfassung', async () => {
+    await unlock();
+    await page.evaluate(() => window.__wow.setFilter('SAMPLE Set Beta'));
+    const before = await scanCount();
+    await testImage(900001);
+    await testImage(900001);
+    assert.equal(await scanCount(), before + 1);
+    assert.equal((await lastRec()).productId, 900016);
+    await page.evaluate(() => window.__wow.setFilter(''));
+  });
+  await check('Bild: fremdes Bild → keine Erfassung', async () => {
+    await unlock();
+    const before = await scanCount();
+    const noise = await page.evaluate(() => {
+      const c = document.createElement('canvas'); c.width = 200; c.height = 279;
+      const x = c.getContext('2d'), d = x.createImageData(200, 279);
+      let s = 99;
+      for (let i = 0; i < d.data.length; i++) { s = (s * 1103515245 + 12345) & 0x7fffffff; d.data[i] = i % 4 === 3 ? 255 : (s >> 16) & 255; }
+      x.putImageData(d, 0, 0);
+      return c.toDataURL('image/png');
+    });
+    for (let i = 0; i < 3; i++) {
+      const r = await testImage(noise);
+      assert.equal(r.ok, false);
+      assert.ok(r.best.d > 70, 'Distanz ' + r.best.d);
+    }
+    assert.equal(await scanCount(), before);
+  });
+  await check('Bild: Bild-Toleranz-Regler wird gespeichert und wirkt', async () => {
+    await tab(page, 'set');
+    await setRange(page, '#calImgS', 40);
+    assert.equal(await page.textContent('#calImgV'), '40');
+    assert.equal((await page.evaluate(() => JSON.parse(localStorage.getItem('wowscan.calib')))).imgMax, 40);
+    assert.equal((await page.evaluate(() => window.__wow.artState())).imgMax, 40);
+    await tab(page, 'scan');
+    const r = await testImage(900005, { filter: 'blur(3px) brightness(1.3)', feed: false });
+    await tab(page, 'set');
+    await setRange(page, '#calImgS', 110);
+    const r2 = await testImage(900005, { filter: 'blur(3px) brightness(1.3)', feed: false });
+    assert.ok(r2.ok, 'Toleranz 110: ' + JSON.stringify(r2.best));
+    assert.equal(r.ok, r.best.d <= 40 && r.margin >= 12, 'Grenze 40 wird angewandt');
+    await page.click('#calReset');
+    assert.equal(await page.inputValue('#calImgS'), '70');
     await tab(page, 'scan');
   });
   await check('Namenszusatz: "Sample Lucky Longshot" erfasst die (LOOT)-Karte, voller Name angezeigt', async () => {
@@ -500,12 +611,14 @@ async function main() {
 
   /* ---------- Kamera (Fake-Device) ---------- */
   await tab(page, 'scan');
-  await check('Kamera: Start mit Fake-Device läuft, OCR-Fehler wird angezeigt, Stopp funktioniert', async () => {
+  await check('Kamera: Start mit Fake-Device läuft, OCR-Rückfall-Fehler als Warnung, Stopp funktioniert', async () => {
     await page.click('#btnScan');
     await page.waitForFunction(() => document.querySelector('#video').videoWidth > 0, null, { timeout: 8000 });
     assert.equal(await page.isHidden('#video'), false);
-    await page.waitForSelector('#banner .banner.err', { timeout: 8000 });
-    assert.match(await page.textContent('#banner'), /Texterkennung nicht verfügbar/);
+    assert.equal(await page.isVisible('#boxArt'), true);
+    // Das Testbild der Fake-Kamera ist keine Karte → Bildabgleich unsicher → OCR-Rückfall lädt (CDN blockiert)
+    await page.waitForSelector('#banner .banner.warn', { timeout: 8000 });
+    assert.match(await page.textContent('#banner'), /Texterkennung nicht verfügbar.*Bildabgleich läuft weiter/);
     assert.equal(await page.textContent('#btnScan'), 'Scan stoppen');
     await page.waitForTimeout(300);
     await page.screenshot({ path: path.join(SHOTS, '05-camera.png') });
@@ -530,6 +643,12 @@ async function main() {
     assert.equal(await page.isVisible('#boxName'), true);
     assert.equal(await page.isVisible('#dbg'), true);
     assert.equal(await page.isVisible('#cvName'), true);
+    await page.evaluate(() => window.__wow.testImage('/sample-data/img/900003.png', { feed: false }));
+    assert.equal(await page.isVisible('#cvArt'), true);
+    assert.ok(await page.evaluate(() => document.querySelector('#cvArt').width) > 100);
+    const dt = await page.textContent('#dbgTxt');
+    assert.match(dt, /Bild: Treffer · beste Distanz \d+/);
+    assert.match(dt, /1\. Sample Frost Oracle.*\n  2\. .*\n  3\. /);
     await tab(page, 'set');
     await setRange(page, '#calNameS', -5);
     await tab(page, 'scan');
@@ -546,6 +665,33 @@ async function main() {
     await tab(page, 'set');
     await page.click('#calReset');
     assert.equal(await page.inputValue('#calNameS'), '0');
+  });
+
+
+  /* ---------- Fake-Kamera mit Kartenbild (Y4M) ---------- */
+  await check('Kamera mit Kartenbild: Bildabgleich erfasst die Karte im Rahmen', async () => {
+    const y4m = path.join(__dirname, 'sample-data', 'camera.y4m');
+    const b2 = await chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--use-file-for-fake-video-capture=' + y4m] });
+    try {
+      const c2 = await b2.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, permissions: ['camera'] });
+      await c2.route('https://cdn.jsdelivr.net/**', (r) => r.abort());
+      const p = await openApp(c2);
+      await p.evaluate(() => window.__wow.setFilter(''));
+      const before = await scanCount();
+      await p.click('#btnScan');
+      await p.waitForFunction(() => document.querySelector('#video').videoWidth > 0, null, { timeout: 8000 });
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline && (await scanCount()) === before) await p.waitForTimeout(250);
+      assert.equal(await scanCount(), before + 1, 'keine Erfassung über die Kamera');
+      assert.equal((await lastRec()).productId, 900003);
+      await p.waitForTimeout(300);
+      assert.match(await p.textContent('#live'), /Sample Frost Oracle/);
+      await p.screenshot({ path: path.join(SHOTS, '09-camera-card.png') });
+      await p.waitForTimeout(1200);
+      assert.equal(await scanCount(), before + 1, 'Karte bleibt im Bild → gesperrt, keine Doppelerfassung');
+      await p.click('#btnScan');
+      assert.deepEqual(p.errors, []);
+    } finally { await b2.close(); }
   });
 
   /* ---------- Layout bei 390 px ---------- */
@@ -639,6 +785,33 @@ async function main() {
     console.log(`  Index ${st.indexMs} ms, Abgleich Ø ${avg.toFixed(1)} ms, max ${max.toFixed(1)} ms`);
     assert.ok(avg < 50, 'Durchschnitt ' + avg);
     await ctx5.close();
+  });
+
+
+  await check('Performance: 10.000 Bild-Hashes, Bildabgleich im Schnitt < 30 ms', async () => {
+    const ctx6 = await browser.newContext({ viewport: { width: 390, height: 844 } });
+    const sample = JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-data', 'cards.json'), 'utf8')).cards;
+    const big = JSON.parse(makeBigCards(10000));
+    big.cards.push(...sample);
+    const hdoc = JSON.parse(fs.readFileSync(path.join(__dirname, 'sample-data', 'hashes.json'), 'utf8'));
+    const sha = (t) => require('node:crypto').createHash('sha256').update(t).digest('hex');
+    for (let i = 0; i < 10000; i++) hdoc.hashes[String(800000 + i)] = [sha('h' + i), sha('c' + i).slice(0, 6)];
+    await ctx6.route('**/sample-data/cards.json', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(big) }));
+    await ctx6.route('**/sample-data/hashes.json', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(hdoc) }));
+    const p7 = await openApp(ctx6);
+    const st = await p7.evaluate(() => window.__wow.artState());
+    assert.ok(st.groups >= 10022, 'Gruppen ' + st.groups);
+    const times = [];
+    for (let i = 0; i < 3; i++) for (const pid of [900003, 900005, 900019, 900020]) {
+      const r = await p7.evaluate((u) => window.__wow.testImage(u, { feed: false }), `/sample-data/img/${pid}.png`);
+      assert.equal(r.best.pid, pid);
+      assert.equal(r.ok, true, `Produkt ${pid}: Abstand ${r.margin}`);
+      times.push(r.ms);
+    }
+    const avg = times.reduce((a, b) => a + b, 0) / times.length;
+    console.log(`  Bildabgleich (Hash + 10.022 Gruppen) Ø ${avg.toFixed(1)} ms, max ${Math.max(...times).toFixed(1)} ms`);
+    assert.ok(avg < 30, 'Durchschnitt ' + avg);
+    await ctx6.close();
   });
 
   /* ---------- Ende ---------- */

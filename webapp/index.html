@@ -28,12 +28,14 @@
       <div id="guide" class="guide" aria-hidden="true" hidden></div>
       <div id="boxName" class="cal-box" aria-hidden="true" hidden><span>Name</span></div>
       <div id="boxNum" class="cal-box" aria-hidden="true" hidden><span>Nummer</span></div>
+      <div id="boxArt" class="cal-box art" aria-hidden="true" hidden><span>Bild</span></div>
       <div id="camMsg" class="cam-msg">Kamera aus. Tippe auf „Scan starten“, um die Kartenerkennung zu starten.</div>
       <div id="live" class="live" aria-live="polite"></div>
     </div>
 
     <div id="dbg" class="dbg" hidden>
-      <p class="meta">Debug: Ausschnitte nach Vorverarbeitung (Graustufen, Kontrast)</p>
+      <p class="meta">Debug: Illustration (Bildabgleich) und OCR-Ausschnitte</p>
+      <canvas id="cvArt" width="10" height="10" aria-label="Ausschnitt Illustration"></canvas>
       <canvas id="cvName" width="10" height="10" aria-label="Ausschnitt Name"></canvas>
       <canvas id="cvNum" width="10" height="10" aria-label="Ausschnitt Nummer"></canvas>
       <pre id="dbgTxt" class="dbg-txt"></pre>
@@ -54,7 +56,7 @@
     <h2 class="h2">Zuletzt erfasst</h2>
     <ul id="recent" class="list"></ul>
 
-    <p class="hint">Der Abgleich läuft gegen englische Kartennamen. Deutsche Kartenausgaben werden über die Suche gefunden.</p>
+    <p class="hint">Erkannt wird über die Illustration der Karte, unabhängig von der Sprache – deutsche Karten funktionieren. Namen werden englisch angezeigt (TCGplayer).</p>
   </section>
 
   <!-- ============ Suche ============ -->
@@ -130,11 +132,13 @@
 
     <section class="box cal" aria-labelledby="calH">
       <h2 id="calH" class="h2">OCR-Kalibrierung</h2>
-      <p class="hint">Die gestrichelten Rahmen im Kamerabild zeigen, wo Name und Sammlernummer gelesen werden. Verschiebe sie mit den Reglern (±10 % der Kartenhöhe), bis sie auf der Karte liegen.</p>
+      <p class="hint">Der Rahmen „Bild“ zeigt den Bereich für den Bildabgleich. Name und Nummer werden nur als Rückfall per Texterkennung gelesen; verschiebe ihre Rahmen mit den Reglern (±10 % der Kartenhöhe), bis sie auf der Karte liegen.</p>
       <label class="field"><span>Namenszeile: Verschiebung <output id="calNameV">0</output> %</span>
         <input id="calNameS" type="range" min="-10" max="10" step="1" value="0"></label>
       <label class="field"><span>Nummer: Verschiebung <output id="calNumV">0</output> %</span>
         <input id="calNumS" type="range" min="-10" max="10" step="1" value="0"></label>
+      <label class="field"><span>Bild-Toleranz (max. Abstand) <output id="calImgV">70</output></span>
+        <input id="calImgS" type="range" min="40" max="110" step="2" value="70"></label>
       <label class="switch"><input type="checkbox" id="calDbg"><span>Debug-Ansicht unter der Kamera</span></label>
       <div class="actions"><button id="calReset" class="btn" type="button">Kalibrierung zurücksetzen</button></div>
     </section>
@@ -174,6 +178,7 @@
 </dialog>
 
 <noscript><p class="banner err">Diese Seite braucht JavaScript.</p></noscript>
+<script src="arthash.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

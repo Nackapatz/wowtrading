@@ -17,6 +17,8 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Erster Lauf lädt bis zu 6000 Kartenbilder (100 ms Pause); danach inkrementell.
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4

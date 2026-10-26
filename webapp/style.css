@@ -94,8 +94,11 @@ strong { color: var(--text); }
   position: absolute; left: 2px; top: -1.25em; font-size: .65rem; line-height: 1.2; padding: 0 4px;
   border-radius: 3px; background: #000a; color: var(--gold-hi); white-space: nowrap;
 }
+.cal-box.art { border-color: rgba(120, 200, 255, .8); background: rgba(120, 200, 255, .06); }
+.cal-box.art span { color: #9fd6ff; }
 .dbg { display: flex; flex-direction: column; gap: 6px; }
 .dbg canvas { width: 100%; height: auto; display: block; background: #000; border: 1px solid var(--border); border-radius: 6px; }
+.dbg #cvArt { width: 50%; max-width: 200px; image-rendering: pixelated; }
 .dbg-txt {
   margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--surface); border: 1px solid var(--border);
   font: .82rem/1.4 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere;

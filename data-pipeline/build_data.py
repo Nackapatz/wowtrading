@@ -31,6 +31,8 @@ from typing import Any, Callable, Iterable, Mapping, Optional
 
 import requests
 
+import arthash
+
 log = logging.getLogger("build_data")
 
 TCG_BASE = "https://tcgcsv.com"
@@ -38,6 +40,7 @@ TCG_CATEGORY = 13
 LAST_UPDATED_URL = f"{TCG_BASE}/last-updated.txt"
 GROUPS_URL = f"{TCG_BASE}/tcgplayer/{TCG_CATEGORY}/groups"
 ECB_URL = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
+DEFAULT_PAGES_DATA = "https://nackapatz.github.io/wowtrading/data/"
 
 REQUEST_DELAY_S = 0.15
 REQUEST_TIMEOUT_S = 30
@@ -62,6 +65,19 @@ class CollectionAborted(PipelineError):
 # ---------------------------------------------------------------------------
 # 1. Fetch layer
 # ---------------------------------------------------------------------------
+
+def previous_hashes_url() -> str:
+    """URL der bisherigen hashes.json auf GitHub Pages (für inkrementelle Bild-Hashes)."""
+    base = os.environ.get("PAGES_DATA_URL", "").strip()
+    if not base:
+        repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
+        if "/" in repo:
+            owner, name = repo.split("/", 1)
+            base = f"https://{owner.lower()}.github.io/{name}/data/"
+        else:
+            base = DEFAULT_PAGES_DATA
+    return base.rstrip("/") + "/hashes.json"
+
 
 def user_agent_string() -> str:
     repo = os.environ.get("GITHUB_REPOSITORY", "").strip() or "unknown"
@@ -369,7 +385,8 @@ Die Dateien werden von einer GitHub Action gebaut.</p>
 <p>Dateien: <a href="data/cards.json">cards.json</a>,
 <a href="data/prices.json">prices.json</a>,
 <a href="data/rates.json">rates.json</a>,
-<a href="data/meta.json">meta.json</a></p>
+<a href="data/meta.json">meta.json</a>,
+<a href="data/hashes.json">hashes.json</a> (Bild-Fingerabdrücke)</p>
 <h2>Quellen</h2>
 <ul>
 <li>Preise: TCGplayer-Marktdaten über <a href="https://tcgcsv.com/">tcgcsv.com</a>
@@ -403,6 +420,7 @@ def run(
     out_dir: Path,
     site_dir: Path,
     now: Optional[datetime] = None,
+    images: Optional[Callable[[list, str], Mapping[str, Any]]] = None,
 ) -> dict[str, Any]:
     generated_at = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -419,6 +437,15 @@ def run(
         Path(site_dir) / "index.html",
         render_index(generated_at, catalog.price_date, len(catalog.cards)),
     )
+    hash_count = None
+    if images is not None:
+        # Bild-Hashes sind optional: ein Fehler darf den Datenlauf nicht stoppen.
+        try:
+            hashes_doc = images(catalog.cards, generated_at)
+            write_json(out_dir / "hashes.json", hashes_doc)
+            hash_count = len(hashes_doc.get("hashes", {}))
+        except Exception as exc:
+            log.warning("Bild-Hashes übersprungen: %s", exc)
     log.info(
         "Fertig: %d Karten, %d/%d Gruppen, %d Preise, USD-Kurse vom %s",
         len(catalog.cards),
@@ -432,7 +459,31 @@ def run(
         "groups_ok": catalog.ok_groups,
         "groups_total": catalog.total_groups,
         "prices": len(catalog.prices),
+        "hashes": hash_count,
     }
+
+
+def make_image_hasher(user_agent: str, max_new: int) -> Callable[[list, str], dict]:
+    """Bild-Hashes inkrementell: vorige hashes.json wiederverwenden, nur fehlende Produkte laden.
+    Scheitert die Berechnung als Ganzes, wird die vorige Datei (falls vorhanden) weitergegeben."""
+    def images(cards: list, generated_at: str) -> dict:
+        session = requests.Session()
+        previous = arthash.load_previous(session, previous_hashes_url(), user_agent)
+        try:
+            doc, stats = arthash.build_hashes_doc(
+                cards, previous, arthash.ImageGetter(session, user_agent), generated_at, max_new=max_new
+            )
+        except Exception as exc:
+            reused = arthash.previous_hashes(previous)
+            if not reused:
+                raise
+            log.warning("Bild-Hashes fehlgeschlagen (%s), vorige Datei wird übernommen", exc)
+            return {"generatedAt": previous.get("generatedAt"), "algo": arthash.ALGO,
+                    "region": list(arthash.REGION), "hashes": reused}
+        log.info("Bild-Hashes: %(total)d gesamt, %(reused)d übernommen, %(fetched)d geladen, "
+                 "%(failed)d ohne Bild, %(skipped)d auf nächsten Lauf verschoben", stats)
+        return doc
+    return images
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -443,6 +494,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         default=None,
         help="Ordner für index.html (Standard: Elternordner von --out)",
     )
+    parser.add_argument("--no-images", action="store_true", help="keine Bild-Hashes (hashes.json) berechnen")
+    parser.add_argument("--max-images", type=int, default=arthash.MAX_NEW_IMAGES,
+                        help="max. neu abgerufene Bilder pro Lauf")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -450,8 +504,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     site_dir = Path(args.site_dir) if args.site_dir else out_dir.parent
 
     client = TcgClient(user_agent=user_agent_string())
+    images = None if args.no_images else make_image_hasher(user_agent_string(), args.max_images)
     try:
-        run(client, out_dir=out_dir, site_dir=site_dir)
+        run(client, out_dir=out_dir, site_dir=site_dir, images=images)
     except (PipelineError, requests.RequestException) as exc:
         log.error("Datenlauf abgebrochen: %s", exc)
         return 1

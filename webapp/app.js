@@ -35,6 +35,8 @@ const EURO_COMMA = new Set(['EUR', 'CHF', 'PLN', 'CZK', 'SEK', 'DKK', 'NOK', 'HU
 const PT_LABEL = { market: 'Marktpreis', low: 'Tiefstpreis', mid: 'Mittelpreis' };
 const PT_IDX = { market: 0, low: 1, mid: 2 };
 const PT_ORDER = ['market', 'mid', 'low'];
+const MATCH_MAX = 70;      // Bild: Start-Grenzwert der Distanz (docs/IMAGE_MATCH.md), per „Bild-Toleranz“ einstellbar
+const MATCH_MARGIN = 12;   // Bild: Mindestabstand zur nächstbesten anderen Illustration
 const RARITY = { C: 'Common', U: 'Uncommon', R: 'Rare', E: 'Epic' }; // andere Codes roh anzeigen, nicht raten
 const rarityName = (r) => RARITY[r] || (r == null ? '' : String(r));
 const setName = (s, sc) => s || sc || '';
@@ -64,7 +66,8 @@ function lsGet(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { 
 function loadCal() {
   const c = lsGet(LS_CAL) || {};
   const clamp = (v) => Math.min(10, Math.max(-10, Math.round(Number(v) || 0)));
-  return { nameOff: clamp(c.nameOff), numOff: clamp(c.numOff), debug: !!c.debug };
+  const img = Number(c.imgMax);
+  return { nameOff: clamp(c.nameOff), numOff: clamp(c.numOff), debug: !!c.debug, imgMax: img >= 40 && img <= 110 ? Math.round(img) : MATCH_MAX };
 }
 function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* Speicher gesperrt: egal */ } }
 
@@ -231,8 +234,11 @@ async function loadData(force = false) {
     if (!force) set = await cacheGet(key).catch(() => null);
     if (!set) {
       setInfo('Lade cards.json, prices.json, rates.json …');
-      const [cards, prices, rates] = await Promise.all(['cards.json', 'prices.json', 'rates.json'].map((f) => getJson(base + f)));
-      set = { meta, cards, prices, rates };
+      const [cards, prices, rates, hashes] = await Promise.all([
+        ...['cards.json', 'prices.json', 'rates.json'].map((f) => getJson(base + f)),
+        getJson(base + 'hashes.json').catch(() => null),   // optional: Bild-Fingerabdrücke
+      ]);
+      set = { meta, cards, prices, rates, hashes };
       try { await cachePut(key, set); await cachePut('latest', key); await cleanupCache(key); } catch { /* ohne Cache weiter */ }
     }
   } catch (e) {
@@ -249,6 +255,7 @@ async function loadData(force = false) {
   }
   S.data = set;
   buildIndex();
+  buildArtIndex();
   renderSetFilter();
   setBanner('data', note ? 'warn' : '', note);
   renderAll();
@@ -490,23 +497,25 @@ function ensureOcr() {
         langPath: 'https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng@1.0.0/4.0.0_best_int',
       }))
       .then((w) => { S.worker = w; return w; })
-      .catch((e) => { S.ocrP = null; throw new Error(e.message); });
+      .catch((e) => { S.ocrP = null; S.ocrFailed = true; throw new Error(e.message); });
   }
   return S.ocrP;
 }
 // Kartenrahmen in Videokoordinaten (S.guide), Zuschnitt + Graustufen/Kontrast in Canvas
-const NAME_BOX = { x: 0.06, y: 0.08, w: 0.88, h: 0.14 };
+// Ausschnitte relativ zur Karte. Name: nur das Namensbanner (ohne Kosten-Symbol links und Wappen rechts).
+const NAME_BOX = { x: 0.20, y: 0.055, w: 0.65, h: 0.07 };
 const NUM_BOX = { x: 0.08, y: 0.86, w: 0.84, h: 0.10 };
+const ART_BOX = { x: 0.10, y: 0.14, w: 0.80, h: 0.42 };   // = REGION von artHash
 const boxY = (box, off) => Math.min(Math.max(box.y + off / 100, 0), 1 - box.h);
-function cropTo(cv, box, off, targetW) {
-  const g = S.guide;
-  const sw = g.w * box.w, sh = g.h * box.h;
-  const sx = g.x + g.w * box.x, sy = g.y + g.h * boxY(box, off);
-  const video = $('#video');
+const CARD_W = 400, CARD_H = 558;                          // Kartenrahmen in Pixeln (wie _400w-Bilder)
+// Ausschnitt aus dem Karten-Canvas, Graustufen + Kontrast (für OCR)
+function cropFrom(src, cv, box, off, targetW) {
+  const sw = src.width * box.w, sh = src.height * box.h;
+  const sx = src.width * box.x, sy = src.height * boxY(box, off);
   const w = Math.round(targetW), h = Math.max(24, Math.round(targetW * sh / sw));
   cv.width = w; cv.height = h;
   const ctx = cv.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
+  ctx.drawImage(src, sx, sy, sw, sh, 0, 0, w, h);
   const im = ctx.getImageData(0, 0, w, h), d = im.data;
   for (let i = 0; i < d.length; i += 4) {
     let v = d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11;
@@ -518,32 +527,169 @@ function cropTo(cv, box, off, targetW) {
   return cv;
 }
 const cvName = $('#cvName'), cvNum = $('#cvNum');
+let cvCard = null;
+function cardCanvas() {
+  if (!cvCard) { cvCard = document.createElement('canvas'); cvCard.width = CARD_W; cvCard.height = CARD_H; }
+  return cvCard;
+}
 async function scanFrame() {
-  if (!S.guide || !S.worker) return;
-  cropTo(cvName, NAME_BOX, S.cal.nameOff, 900);
-  cropTo(cvNum, NUM_BOX, S.cal.numOff, 700);
-  const w = S.worker;
-  // Sequenziell: erst Name (ohne Whitelist), dann Nummer (Whitelist 0-9 und /)
-  await w.setParameters({ tessedit_pageseg_mode: '7', tessedit_char_whitelist: '' });
-  const a = await w.recognize(cvName);
-  await w.setParameters({ tessedit_pageseg_mode: '7', tessedit_char_whitelist: '0123456789/' });
-  const b = await w.recognize(cvNum);
-  const name = String((a.data && a.data.text) || '').replace(/\s+/g, ' ').trim();
-  const num = String((b.data && b.data.text) || '').trim();
-  const conf = (a.data && a.data.confidence) || 0;
-  const m = matchName(name);
-  const numRead = parseNum(num);
-  S.dbg = { name, num, numRead, conf, top: m.ranked[0] || null };
+  if (!S.guide) return;
+  const cv = cardCanvas(), g = S.guide;
+  cv.getContext('2d', { willReadFrequently: true }).drawImage($('#video'), g.x, g.y, g.w, g.h, 0, 0, CARD_W, CARD_H);
+  await processCard(cv, true);
+}
+
+/* Bildindex: Produkte mit identischem Hash = dieselbe Illustration (Nachdrucke) → eine Gruppe. */
+function buildArtIndex() {
+  S.art = null;
+  const doc = S.data && S.data.hashes, AH = self.WowArtHash;
+  if (!AH || !doc || doc.algo !== AH.ALGO || !doc.hashes || !S.idx) return;
+  const pidIdx = new Map();
+  S.idx.cards.forEach((c, i) => pidIdx.set(String(c.p), i));
+  const groups = new Map();
+  for (const pid of Object.keys(doc.hashes)) {
+    const e = doc.hashes[pid], i = pidIdx.get(pid);
+    if (i == null || !Array.isArray(e) || !/^[0-9a-f]{64}$/.test(e[0]) || !/^[0-9a-f]{6}$/.test(e[1])) continue;
+    let g = groups.get(e[0]);
+    if (!g) groups.set(e[0], (g = { hash: e[0], color: e[1], mem: [] }));
+    g.mem.push(i);
+  }
+  const list = [...groups.values()], n = list.length;
+  const words = new Uint32Array(n * 8), rgb = new Uint8Array(n * 3), members = new Array(n);
+  list.forEach((g, k) => {
+    words.set(AH.hexWords(g.hash), k * 8);
+    const c = parseInt(g.color, 16);
+    rgb[k * 3] = (c >> 16) & 255; rgb[k * 3 + 1] = (c >> 8) & 255; rgb[k * 3 + 2] = c & 255;
+    members[k] = g.mem;
+  });
+  S.art = { n, words, rgb, members, count: list.reduce((a, g) => a + g.mem.length, 0) };
+}
+// Distanz = Hamming(256 Bit) + round(0,25·(|ΔR|+|ΔG|+|ΔB|)/8); Treffer bei ≤ Grenze und Abstand ≥ MATCH_MARGIN.
+function matchArt(a) {
+  const A = S.art, q = a.words, flt = S.setFilter, cards = S.idx.cards, top = [];
+  const r0 = a.rgb[0], g0 = a.rgb[1], b0 = a.rgb[2];
+  for (let k = 0; k < A.n; k++) {
+    let mem = A.members[k];
+    if (flt) { mem = mem.filter((i) => cards[i].s === flt); if (!mem.length) continue; }
+    const o = k * 8;
+    let h = 0;
+    for (let w = 0; w < 8; w++) {
+      let v = (A.words[o + w] ^ q[w]) >>> 0;
+      v -= (v >>> 1) & 0x55555555;
+      v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
+      h += Math.imul((v + (v >>> 4)) & 0x0f0f0f0f, 0x01010101) >>> 24;
+    }
+    const d = h + Math.round(0.25 * (Math.abs(A.rgb[k * 3] - r0) + Math.abs(A.rgb[k * 3 + 1] - g0) + Math.abs(A.rgb[k * 3 + 2] - b0)) / 8);
+    if (top.length < 6 || d < top[top.length - 1].d) {
+      let p = top.length < 6 ? top.length : 5;
+      while (p > 0 && top[p - 1].d > d) { top[p] = top[p - 1]; p--; }
+      top[p] = { d, mem };
+      if (top.length > 6) top.length = 6;
+    }
+  }
+  const best = top[0], second = top[1];
+  const margin = best && second ? second.d - best.d : null;
+  return {
+    ok: !!best && best.d <= S.cal.imgMax && (margin == null || margin >= MATCH_MARGIN),
+    best: best ? best.d : null, margin,
+    top: top.slice(0, 5).map((t) => ({ d: t.d, cards: t.mem.map((i) => cards[i]) })),
+  };
+}
+const artRanked = (t, score) => ({ base: baseKey(t.cards[0]), score, d: t.d, cards: t.cards, card: t.cards[0] });
+// OCR-Name (englisch) wählt unter den Top-5-Bildtreffern, wenn die Bildregeln knapp verfehlt sind.
+function pickByName(top, name) {
+  const q = norm(stripSuffix(name));
+  if (q.length < 3) return null;
+  for (const t of top) {
+    if (t.d > S.cal.imgMax + 2 * MATCH_MARGIN) break;
+    for (const card of t.cards) {
+      const b = baseKey(card), maxL = Math.max(b.length, q.length), maxD = Math.floor(0.2 * maxL);
+      if (lev(q, b, maxD) <= maxD) return t;
+    }
+  }
+  return null;
+}
+function ocrUsable() {
+  if (S.worker) return true;
+  if (!S.ocrFailed && !S.ocrP) {
+    ensureOcr().then(() => setBanner('ocr', '', ''), (e) => setBanner('ocr', S.art ? 'warn' : 'err',
+      `Texterkennung nicht verfügbar (${e.message}). ${S.art ? 'Der Bildabgleich läuft weiter.' : 'Ohne Bilddaten ist keine automatische Erkennung möglich; Karten lassen sich über die Suche erfassen.'}`));
+  }
+  return false;
+}
+async function ocrName(cv) {
+  if (!ocrUsable()) return null;
+  cropFrom(cv, cvName, NAME_BOX, S.cal.nameOff, 900);
+  await S.worker.setParameters({ tessedit_pageseg_mode: '7', tessedit_char_whitelist: '' });
+  const a = await S.worker.recognize(cvName);
+  return { text: String((a.data && a.data.text) || '').replace(/\s+/g, ' ').trim(), conf: (a.data && a.data.confidence) || 0 };
+}
+// Sammlernummer (z. B. „153/264“) nur beim Erfassen lesen, falls die Texterkennung bereits geladen ist.
+async function ocrNumber(cv) {
+  if (!S.worker) return null;
+  try {
+    cropFrom(cv, cvNum, NUM_BOX, S.cal.numOff, 700);
+    await S.worker.setParameters({ tessedit_pageseg_mode: '7', tessedit_char_whitelist: '0123456789/' });
+    const b = await S.worker.recognize(cvNum);
+    const raw = String((b.data && b.data.text) || '').trim();
+    if (S.dbg) S.dbg.num = raw;
+    return parseNum(raw);
+  } catch { return null; }
+}
+
+/* Ein Kartenbild auswerten: zuerst Bildabgleich (schnell), nur wenn nicht eindeutig die Namens-OCR.
+ * feed=false: nur auswerten (Tests), keine Erfassung. */
+async function processCard(cv, feed = true) {
+  const t0 = performance.now();
+  let res = null;
+  if (S.art) {
+    const im = cv.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, cv.width, cv.height);
+    res = matchArt(self.WowArtHash.artHash(im.data, cv.width, cv.height, 4));
+  }
+  const ms = performance.now() - t0;
+  S.dbgArt = { res, ms };
+  if (S.cal.debug) drawArtDebug(cv);
+  let m = null, via = 'Bild', ocr = null;
+  if (res && res.ok) m = { ranked: [artRanked(res.top[0], 1)] };
+  else if (feed) {
+    ocr = await ocrName(cv);
+    if (ocr && res) { const t = pickByName(res.top, ocr.text); if (t) { m = { ranked: [artRanked(t, 0.9)] }; via = 'Bild + Name'; } }
+    else if (ocr) { m = matchName(ocr.text); via = 'Name'; }
+  }
+  if (!m && res && res.top.length && res.best <= S.cal.imgMax + MATCH_MARGIN) {
+    m = { ranked: res.top.slice(0, 3).map((t) => artRanked(t, 0.7)) };
+    via = 'Bild (unsicher)';
+  }
+  if (!m) m = { ranked: [] };
+  S.dbg = { name: ocr ? ocr.text : '', num: S.dbg ? S.dbg.num : '', conf: ocr ? ocr.conf : 0, via };
   renderDbg();
-  await onFrame(m, name, numRead, conf);
+  const summary = {
+    ok: !!(res && res.ok), via, ms,
+    best: res && res.top[0] ? { pid: res.top[0].cards[0].p, d: res.top[0].d, printings: res.top[0].cards.map((c) => c.p) } : null,
+    top: res ? res.top.map((t) => ({ pid: t.cards[0].p, d: t.d })) : [], margin: res ? res.margin : null,
+  };
+  if (feed) {
+    S.numReader = () => ocrNumber(cv);
+    try { await onFrame(m, ocr ? ocr.text : '', null, ocr ? ocr.conf : 0); } finally { S.numReader = null; }
+  }
+  return summary;
+}
+function drawArtDebug(src) {
+  const c = $('#cvArt'), b = self.WowArtHash.regionBox(src.width, src.height);
+  c.width = b[2] - b[0]; c.height = b[3] - b[1];
+  c.getContext('2d').drawImage(src, b[0], b[1], c.width, c.height, 0, 0, c.width, c.height);
 }
 function renderDbg() {
   $('#dbg').hidden = !S.cal.debug;
-  if (!S.cal.debug || !S.dbg) return;
-  const d = S.dbg;
-  $('#dbgTxt').textContent = `Name roh: "${d.name}" (Konfidenz ${Math.round(d.conf)})\n`
-    + `Nummer roh: "${d.num}" → ${d.numRead || '–'} (nur gespeichert, nicht für den Abgleich)\n`
-    + `Treffer: ${d.top ? `${d.top.card.n} (${Math.round(d.top.score * 100)} %, ${d.top.cards.length} Druck/e)` : '–'}`;
+  if (!S.cal.debug) return;
+  const L = [], a = S.dbgArt, d = S.dbg;
+  if (a && a.res) {
+    const r = a.res;
+    L.push(`Bild: ${r.ok ? 'Treffer' : 'nicht eindeutig'} · beste Distanz ${r.best ?? '–'} (Grenze ${S.cal.imgMax}) · Abstand zur nächsten Illustration ${r.margin ?? '–'} (nötig ${MATCH_MARGIN}) · ${a.ms.toFixed(1)} ms`);
+    r.top.slice(0, 3).forEach((t, i) => L.push(`  ${i + 1}. ${t.cards[0].n} · ${setName(t.cards[0].s, t.cards[0].sc)}${t.cards.length > 1 ? ` (+${t.cards.length - 1} Druck/e)` : ''}: ${t.d}`));
+  } else if (a) L.push('Bild: keine Bilddaten (hashes.json fehlt), nur Namensabgleich');
+  if (d) L.push(`Weg: ${d.via || '–'} · Name-OCR: "${d.name || ''}"${d.conf ? ` (Konfidenz ${Math.round(d.conf)})` : ''} · Nummer roh: "${d.num || ''}"`);
+  $('#dbgTxt').textContent = L.join('\n');
 }
 
 /* Stabilitätsregel: gleiche Karte in 2 aufeinanderfolgenden Frames (>= 0,8) erfassen;
@@ -562,7 +708,7 @@ async function onFrame(m, name, num, conf) {
     if (c.cards.length > 1) {
       S.streak = 0; S.streakPid = null;
       setLive(`${stripSuffix(c.card.n)}: ${c.cards.length} Drucke – bitte Set wählen`);
-      showSuggest(c.cards.slice(0, 6).map((card) => ({ card, score: sc })), 'Diese Karte gibt es in mehreren Sets. Tippe den richtigen Druck an:', num);
+      showSuggest(c.cards.slice(0, 6).map((card) => ({ card, score: sc, d: c.d })), 'Diese Karte gibt es in mehreren Sets. Tippe den richtigen Druck an:', num);
       return;
     }
     if (S.streakPid === c.base) S.streak++;
@@ -572,18 +718,19 @@ async function onFrame(m, name, num, conf) {
       S.streak = 0; S.streakPid = null;
       S.locked = c.base; S.others = 0;
       setLive(`Erkannt: ${c.card.n}`);
-      const rec = await captureCard(c.card, { ocr: Math.round(conf), number: num });
+      const number = num || (S.numReader ? await S.numReader() : null);
+      const rec = await captureCard(c.card, { ocr: conf ? Math.round(conf) : null, number });
       if (!rec) S.locked = null;
       return;
     }
-    setLive(`Erkannt: ${c.card.n} (${pct} %)${num ? ' · #' + num : ''}, Bestätigung …`);
+    setLive(`Erkannt: ${c.card.n} (${c.d != null ? 'Bild-Abstand ' + c.d : pct + ' %'})${num ? ' · #' + num : ''}, Bestätigung …`);
     return;
   }
   S.streak = 0; S.streakPid = null;
   if (c && sc >= 0.6) {
-    setLive(`Unsicher: ${pct} % – bitte Vorschlag wählen`);
+    setLive(`Unsicher${c.d != null ? ' (Bild-Abstand ' + c.d + ')' : ': ' + pct + ' %'} – bitte Vorschlag wählen`);
     const list = [];
-    for (const r of m.ranked.filter((x) => x.score >= 0.6).slice(0, 3)) for (const card of r.cards) if (list.length < 6) list.push({ card, score: r.score });
+    for (const r of m.ranked.filter((x) => x.score >= 0.6).slice(0, 3)) for (const card of r.cards) if (list.length < 6) list.push({ card, score: r.score, d: r.d });
     showSuggest(list, 'Unsicher erkannt. Tippe die richtige Karte an:', num);
   } else {
     hideSuggest();
@@ -600,7 +747,7 @@ function showSuggest(list, title, num = null) {
     S.suggKey = key;
     $('#chips').innerHTML = list.map((r, i) => {
       const pi = priceInfo(r.card, S.ui.foil);
-      return `<button class="chip" type="button" data-si="${i}">${esc(r.card.n)}<b>${Math.round(r.score * 100)} %</b>
+      return `<button class="chip" type="button" data-si="${i}">${esc(r.card.n)}<b>${r.d != null ? 'Δ ' + r.d : Math.round(r.score * 100) + ' %'}</b>
       <small>${esc(metaLine(setName(r.card.s, r.card.sc), pi.value == null ? 'kein Preis' : fmtMoney(pi.value, pi.cur) + (pi.fallback ? ' (' + PT_LABEL[pi.pt] + ')' : '')))}</small></button>`;
     }).join('');
   }
@@ -621,6 +768,7 @@ function layoutGuide() {
   S.guide = { x: (gx - ox) / s, y: (gy - oy) / s, w: gw / s, h: gh / s };
   placeBox($('#boxName'), NAME_BOX, S.cal.nameOff, gx, gy, gw, gh);
   placeBox($('#boxNum'), NUM_BOX, S.cal.numOff, gx, gy, gw, gh);
+  placeBox($('#boxArt'), ART_BOX, 0, gx, gy, gw, gh);
 }
 function placeBox(el, box, off, gx, gy, gw, gh) {
   Object.assign(el.style, { left: gx + gw * box.x + 'px', top: gy + gh * boxY(box, off) + 'px', width: gw * box.w + 'px', height: gh * box.h + 'px' });
@@ -676,28 +824,21 @@ async function startScan() {
   $('#btnScan').textContent = 'Scan stoppen';
   $('#btnScan').setAttribute('aria-pressed', 'true');
   $('#guide').hidden = false;
-  $('#boxName').hidden = false; $('#boxNum').hidden = false;
+  $('#boxName').hidden = false; $('#boxNum').hidden = false; $('#boxArt').hidden = false;
   layoutGuide();
   renderDbg();
   keepAwake(true);
-  setLive('Lade Texterkennung (einmalig, ca. 2 MB) …');
-  try {
-    await ensureOcr();
-    setBanner('ocr', '', '');
-  } catch (e) {
-    setLive('');
-    setBanner('ocr', 'err', `Texterkennung nicht verfügbar (${e.message}). Die Kamera läuft weiter; Karten lassen sich über die Suche erfassen.`);
-    return;
-  }
-  if (!S.scanning) return;
-  setLive('Suche Karte …');
+  S.ocrFailed = false;
+  setBanner('ocr', '', '');
+  if (!S.art) { setLive('Lade Texterkennung (einmalig) …'); ocrUsable(); }   // ohne Bilddaten ist OCR der einzige Weg
+  else setLive('Karte in den Rahmen legen …');
   startLoop();
 }
 function startLoop() {
   const id = ++S.loopId;
   const step = async () => {
     if (!S.scanning || id !== S.loopId) return;
-    if (!S.busy && S.worker && $('#video').videoWidth) {
+    if (!S.busy && $('#video').videoWidth) {
       S.busy = true;
       try { await scanFrame(); } catch (e) { console.warn('Frame-Fehler', e); }
       finally { S.busy = false; }
@@ -715,7 +856,7 @@ function stopScan() {
   const v = $('#video');
   v.srcObject = null; v.hidden = true;
   $('#guide').hidden = true;
-  $('#boxName').hidden = true; $('#boxNum').hidden = true;
+  $('#boxName').hidden = true; $('#boxNum').hidden = true; $('#boxArt').hidden = true;
   $('#btnScan').textContent = 'Scan starten';
   $('#btnScan').setAttribute('aria-pressed', 'false');
   setLive('');
@@ -949,7 +1090,7 @@ function renderScanInfo() {
   if (!S.data) { setInfo('Keine Kartendaten geladen.'); return; }
   const n = S.data.cards.cards ? S.data.cards.cards.length : 0;
   const date = (S.data.prices && S.data.prices.priceDate) || S.data.meta.priceDate;
-  setInfo(`${n} Karten · Preise Stand ${fmtDate(date)} · Währung ${S.settings.currency}${S.setFilter ? ' · Set-Filter: ' + S.setFilter : ''} · Abgleich gegen englische Namen`);
+  setInfo(`${n} Karten · Preise Stand ${fmtDate(date)} · Währung ${S.settings.currency}${S.setFilter ? ' · Set-Filter: ' + S.setFilter : ''} · ${S.art ? `Abgleich per Bild (${S.art.count} Bilder), Namen englisch` : 'keine Bilddaten: Abgleich nur über englische Namen'}`);
 }
 function renderSetFilter() {
   const sel = $('#setFilter');
@@ -1054,6 +1195,7 @@ function renderSettings() {
   renderEspInfo();
 }
 function renderCal() {
+  $('#calImgS').value = S.cal.imgMax; $('#calImgV').textContent = S.cal.imgMax;
   $('#calNameS').value = S.cal.nameOff; $('#calNameV').textContent = S.cal.nameOff;
   $('#calNumS').value = S.cal.numOff; $('#calNumV').textContent = S.cal.numOff;
   $('#calDbg').checked = S.cal.debug;
@@ -1166,7 +1308,8 @@ function bindUi() {
   $('#calNameS').addEventListener('input', (e) => { S.cal.nameOff = Number(e.target.value); $('#calNameV').textContent = S.cal.nameOff; saveCal(); layoutGuide(); });
   $('#calNumS').addEventListener('input', (e) => { S.cal.numOff = Number(e.target.value); $('#calNumV').textContent = S.cal.numOff; saveCal(); layoutGuide(); });
   $('#calDbg').addEventListener('change', (e) => { S.cal.debug = e.target.checked; saveCal(); renderDbg(); });
-  $('#calReset').addEventListener('click', () => { S.cal.nameOff = 0; S.cal.numOff = 0; saveCal(); renderCal(); layoutGuide(); });
+  $('#calImgS').addEventListener('input', (e) => { S.cal.imgMax = Number(e.target.value); $('#calImgV').textContent = S.cal.imgMax; saveCal(); });
+  $('#calReset').addEventListener('click', () => { S.cal.nameOff = 0; S.cal.numOff = 0; S.cal.imgMax = MATCH_MAX; saveCal(); renderCal(); layoutGuide(); });
   // Bilder ohne Erfolg unsichtbar machen, Platz im Raster bleibt erhalten (kein Inline-Handler)
   document.addEventListener('error', (e) => { if (e.target && e.target.tagName === 'IMG') e.target.style.visibility = 'hidden'; }, true);
   $('#video').addEventListener('resize', layoutGuide);
@@ -1194,9 +1337,35 @@ async function boot() {
  * Testhilfe (nur für Tests/Diagnose): window.__wow
  * ============================================================ */
 const round3 = (v) => Math.round(v * 1000) / 1000;
+function loadImage(url) {
+  return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Bild nicht ladbar: ' + url)); i.src = url; });
+}
 const bootP = boot();
 window.__wow = {
   ready: bootP,
+  // Bild wie den Kartenrahmen eines Kamerabilds auswerten. opts: feed (Erfassungslogik), filter (Canvas-Filter), shift (px), scale
+  async testImage(url, opts = {}) {
+    const img = await loadImage(url);
+    const cv = document.createElement('canvas');
+    cv.width = CARD_W; cv.height = CARD_H;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    ctx.fillStyle = '#111'; ctx.fillRect(0, 0, CARD_W, CARD_H);
+    if (opts.filter) ctx.filter = opts.filter;
+    const sc = opts.scale || 1, sh = opts.shift || 0;
+    ctx.drawImage(img, sh + (CARD_W - CARD_W * sc) / 2, sh + (CARD_H - CARD_H * sc) / 2, CARD_W * sc, CARD_H * sc);
+    return processCard(cv, opts.feed !== false);
+  },
+  // artHash eines Bildes in Originalgröße (Abgleich Browser ↔ Python)
+  async hashImage(url) {
+    const img = await loadImage(url);
+    const cv = document.createElement('canvas');
+    cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0);
+    const r = self.WowArtHash.artHash(ctx.getImageData(0, 0, cv.width, cv.height).data, cv.width, cv.height, 4);
+    return { hash: r.hash, color: r.color };
+  },
+  artState: () => (S.art ? { groups: S.art.n, products: S.art.count, imgMax: S.cal.imgMax } : null),
   testMatch(nameText) {
     const m = matchName(nameText);
     const out = (r) => ({ base: r.base, name: r.card.n, pid: r.card.p, score: round3(r.score), printings: r.cards.map((c) => c.p) });
