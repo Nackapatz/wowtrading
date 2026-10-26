@@ -26,8 +26,14 @@ python -m PyInstaller --onefile --windowed --noconfirm --clean `
     --add-data "firmware.bin;." `
     --paths $here `
     --collect-submodules esptool `
+    --collect-data esptool `
     --collect-submodules serial `
     flasher.py
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller fehlgeschlagen." }
+
+# Selbsttest: esptool-Stub-Dateien und firmware.bin müssen in der EXE stecken
+$exe = Join-Path $here "dist\WoWScannerFlasher.exe"
+$p = Start-Process -FilePath $exe -ArgumentList '--selftest' -Wait -PassThru
+if ($p.ExitCode -ne 0) { throw "Selbsttest der EXE fehlgeschlagen (Exit-Code $($p.ExitCode))." }
 
 Write-Host "Fertig: $(Join-Path $here 'dist\WoWScannerFlasher.exe')"

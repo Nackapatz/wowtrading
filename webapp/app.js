@@ -18,6 +18,8 @@ const SOURCE = 'TCGplayer via tcgcsv.com';
 const LS_UI = 'wowscan.ui';
 const LS_SET = 'wowscan.settings';
 const LS_CAL = 'wowscan.calib';
+const LS_FLT = 'wowscan.setFilter';
+const LS_LEARN = 'wowscan.learnedNames';
 const INSECURE_MSG = 'Die Kamera braucht eine sichere Verbindung (HTTPS). Öffne die Seite über https://<IP-des-Scanners>/ und bestätige die Zertifikatswarnung deines Browsers (z. B. „Erweitert“ → „Weiter zu … (unsicher)“). Das Zertifikat erzeugt dein Scanner selbst, deshalb warnt der Browser.';
 
 // Land → [Name, Währung]
@@ -33,6 +35,18 @@ const CUR_OF = Object.fromEntries(COUNTRIES.map(([c, , cur]) => [c, cur]));
 const EURO_COMMA = new Set(['EUR', 'CHF', 'PLN', 'CZK', 'SEK', 'DKK', 'NOK', 'HUF']);
 const PT_LABEL = { market: 'Marktpreis', low: 'Tiefstpreis', mid: 'Mittelpreis' };
 const PT_IDX = { market: 0, low: 1, mid: 2 };
+const PT_ORDER = ['market', 'mid', 'low'];
+const MATCH_MAX = 70;      // Bild: Start-Grenzwert der Distanz (docs/IMAGE_MATCH.md), per „Bild-Toleranz“ einstellbar
+const MATCH_MARGIN = 12;   // Bild: Mindestabstand zur nächstbesten anderen Illustration
+const RARITY = { C: 'Common', U: 'Uncommon', R: 'Rare', E: 'Epic' }; // andere Codes roh anzeigen, nicht raten
+const rarityName = (r) => RARITY[r] || (r == null ? '' : String(r));
+const setName = (s, sc) => s || sc || '';
+// Anzeigezeile: Set · #Nummer · Seltenheit (leere Teile entfallen)
+const metaLine = (...parts) => parts.filter((x) => x != null && x !== '').join(' · ');
+const numPart = (n) => (n ? '#' + n : '');
+const dispName = (r) => (r.nameDe ? `${r.nameDe} (${r.name})` : r.name);
+// Werte „Kosten 2 · 2/2“ (Angriff/Leben), fehlende Teile entfallen
+const statLine = (r) => metaLine(r.cost != null ? 'Kosten ' + r.cost : '', r.atk != null || r.hp != null ? `${r.atk ?? '–'}/${r.hp ?? r.health ?? '–'}` : '');
 
 const fmtMoney = (v, cur) => (typeof v !== 'number' ? 'kein Preis'
   : new Intl.NumberFormat('de-DE', { style: 'currency', currency: cur, maximumFractionDigits: cur === 'JPY' ? 0 : 2 }).format(v));
@@ -44,15 +58,23 @@ function fmtUptime(sec) {
   const s = Number(sec) || 0;
   return `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`;
 }
-function priceLabel(pt, cur, date) {
-  return `TCGplayer-${PT_LABEL[pt] || PT_LABEL.market} (US)${cur === 'USD' ? '' : ', umgerechnet'}, Stand ${fmtDate(date)}`;
+function ptText(pt, wanted) {
+  const t = PT_LABEL[pt] || PT_LABEL.market;
+  return wanted && wanted !== pt ? `${t} (kein ${PT_LABEL[wanted]} verfügbar)` : t;
+}
+function priceLabel(pt, cur, date, wanted) {
+  return `TCGplayer-Preis (US), ${ptText(pt, wanted)}${cur === 'USD' ? '' : ', umgerechnet'}, Stand ${fmtDate(date)}`;
 }
 function lsGet(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } }
-// OCR-Kalibrierung: Verschiebung der Ausschnitte in Prozent der Kartenhöhe (-10..10) + Debug-Schalter
+// Kalibrierung: je Bereich Verschiebung [x, y] in % der Kartenbreite/-höhe (-10..10), Bild-Toleranz, Debug
+const CAL_REGS = ['name', 'strip', 'cost', 'atk', 'hp'];
 function loadCal() {
   const c = lsGet(LS_CAL) || {};
-  const clamp = (v) => Math.min(10, Math.max(-10, Math.round(Number(v) || 0)));
-  return { nameOff: clamp(c.nameOff), numOff: clamp(c.numOff), debug: !!c.debug };
+  const cl = (v) => Math.min(10, Math.max(-10, Math.round(Number(v) || 0)));
+  const img = Number(c.imgMax), o = c.off || { name: [0, c.nameOff], strip: [0, c.numOff] };   // altes Format übernehmen
+  const off = {};
+  for (const r of CAL_REGS) off[r] = [cl(o[r] && o[r][0]), cl(o[r] && o[r][1])];
+  return { off, debug: !!c.debug, imgMax: img >= 40 && img <= 110 ? Math.round(img) : MATCH_MAX };
 }
 function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* Speicher gesperrt: egal */ } }
 
@@ -63,6 +85,9 @@ const S = {
   settings: { country: 'DE', currency: 'EUR', dataUrl: '' },
   ui: { priceType: 'market', foil: false, cond: 'NM', ...(lsGet(LS_UI) || {}) },
   cal: loadCal(),
+  setFilter: String(lsGet(LS_FLT) || ''),
+  lastWanted: null,
+  suggKey: '',
   esp: null,
   data: null,          // { meta, cards, prices, rates }
   idx: null,           // Suchindex (vorberechnet)
@@ -73,7 +98,8 @@ const S = {
   sugg: [],            // Vorschläge (mittlere Sicherheit)
   dlgCard: null,
   // Scan-Schleife
-  scanning: false, stream: null, worker: null, ocrP: null, busy: false, loopId: 0,
+  learned: lsGet(LS_LEARN) || {},   // gelernte deutsche Namen → k
+  scanning: false, stream: null, workers: {}, ocrP: {}, busy: false, loopId: 0,
   guide: null, locked: null, others: 0, streak: 0, streakPid: null, wake: null, ac: null,
   searchTmr: 0,
 };
@@ -216,8 +242,11 @@ async function loadData(force = false) {
     if (!force) set = await cacheGet(key).catch(() => null);
     if (!set) {
       setInfo('Lade cards.json, prices.json, rates.json …');
-      const [cards, prices, rates] = await Promise.all(['cards.json', 'prices.json', 'rates.json'].map((f) => getJson(base + f)));
-      set = { meta, cards, prices, rates };
+      const [cards, prices, rates, hashes] = await Promise.all([
+        ...['cards.json', 'prices.json', 'rates.json'].map((f) => getJson(base + f)),
+        getJson(base + 'hashes.json').catch(() => null),   // optional: Bild-Fingerabdrücke
+      ]);
+      set = { meta, cards, prices, rates, hashes };
       try { await cachePut(key, set); await cachePut('latest', key); await cleanupCache(key); } catch { /* ohne Cache weiter */ }
     }
   } catch (e) {
@@ -234,6 +263,8 @@ async function loadData(force = false) {
   }
   S.data = set;
   buildIndex();
+  buildArtIndex();
+  renderSetFilter();
   setBanner('data', note ? 'warn' : '', note);
   renderAll();
   return true;
@@ -284,52 +315,92 @@ function lev(a, b, max) {
   }
   return prev[lb];
 }
-function numKey(s) {
-  const t = String(s ?? '');
-  const m = /(\d{1,3})\s*\/\s*\d{1,3}/.exec(t) || /(\d{1,4})/.exec(t);
-  return m ? parseInt(m[1], 10) : -1;
+// Namenszusätze am Ende wie "(LOOT)" oder "(Foil)" entfernen – nur für den Abgleich, Anzeige bleibt voll.
+function stripSuffix(n) {
+  const full = String(n ?? '');
+  let t = full, prev;
+  do { prev = t; t = t.replace(/\s*\([^()]*\)\s*$/, ''); } while (t !== prev && t);
+  return t || full;
 }
+const baseKey = (card) => norm(stripSuffix(card.n));
+// cards.json v1 (x: extendedData, num als Text) und v2 (k, num/tot, Werte) auf ein Format bringen
+const intOr = (v) => (v == null || v === '' || isNaN(+v) ? null : +v);
+function normCard(c) {
+  const v1 = c.k == null;
+  if (v1) c.k = 'p' + c.p;
+  if (c.p === undefined) c.p = null;
+  if (typeof c.num === 'string' && !v1) { c.numTxt = c.num; c.num = null; }   // v2: „1/2“ (Vorder-/Rückseite) bleibt Text
+  if (typeof c.num === 'string') {
+    const m = /^\s*(\d+)\s*(?:\/\s*(\d+))?/.exec(c.num);
+    c.num = m ? +m[1] : null;
+    if (m && m[2] && c.tot == null) c.tot = +m[2];
+  }
+  const x = c.x || {};
+  if (c.cost === undefined) c.cost = intOr(x.Cost);
+  if (c.atk === undefined) c.atk = intOr(x.ATK);
+  if (c.hp === undefined) c.hp = intOr(x.Health);
+  if (c.fac === undefined) c.fac = x.Faction ?? null;
+  if (c.race === undefined) c.race = x.Race ?? null;
+  if (c.cls === undefined) c.cls = x.Class ?? null;
+  return c;
+}
+const numStr = (c) => (c.num == null ? c.numTxt || null : c.tot ? `${c.num}/${c.tot}` : String(c.num));
 function buildIndex() {
   const t0 = performance.now();
-  const cards = S.data.cards.cards || [];
+  const doc = S.data.cards, cards = (doc.cards || []).map(normCard);
   const n = cards.length;
-  const names = new Array(n), lens = new Uint16Array(n), tris = new Array(n), nums = new Int32Array(n);
+  const names = new Array(n), byBase = new Map(), sets = new Set(), byNum = new Map(), byK = new Map(), setMap = new Map();
+  for (const s of doc.sets || []) setMap.set(s.id, { key: s.id, n: s.n, w0: s.w || '', w: norm(s.w).replace(/ /g, ''), w2: norm(s.w).split(' ').pop(), tot: s.tot || null });
   for (let i = 0; i < n; i++) {
-    const nm = norm(cards[i].n);
-    names[i] = nm; lens[i] = nm.length; tris[i] = trigrams(nm); nums[i] = numKey(cards[i].num);
+    const c = cards[i], sk = c.si ?? c.s;
+    names[i] = norm(c.n);
+    byK.set(c.k, c);
+    if (!setMap.has(sk)) setMap.set(sk, { key: sk, n: c.s, w0: c.sc || '', w: norm(c.sc).replace(/ /g, ''), tot: null });
+    const st = setMap.get(sk);
+    if (c.tot && !st.tot) st.tot = c.tot;
+    c.sw = st.w0 || c.sc || null;
+    if (c.num != null) { const key = sk + '|' + c.num; if (!byNum.has(key)) byNum.set(key, []); byNum.get(key).push(i); }
+    const b = baseKey(cards[i]);
+    let a = byBase.get(b);
+    if (!a) byBase.set(b, (a = []));
+    a.push(i);
+    if (cards[i].s) sets.add(cards[i].s);
   }
-  S.idx = { cards, names, lens, tris, nums, n, ms: performance.now() - t0 };
+  const bases = [...byBase.keys()], m = bases.length;
+  const lens = new Uint16Array(m), tris = new Array(m), members = new Array(m);
+  for (let k = 0; k < m; k++) { lens[k] = bases[k].length; tris[k] = trigrams(bases[k]); members[k] = byBase.get(bases[k]); }
+  S.idx = { cards, names, bases, lens, tris, members, n, m, byNum, byK, setList: [...setMap.values()], sets: [...sets].sort((a, b) => a.localeCompare(b, 'de')), ms: performance.now() - t0 };
+  if (S.setFilter && !S.idx.sets.includes(S.setFilter)) { S.setFilter = ''; lsSet(LS_FLT, ''); }
 }
 const MIN_SIM = 0.5;
-/* Liefert die besten Kandidaten {card, score} (score 0..1). Reihenfolge: Länge → Trigramme → Levenshtein. */
-function matchName(nameText, numText = '') {
+/* Abgleich gegen eindeutige Grundnamen (ohne Zusatz). Liefert [{base, score, cards (Drucke, ggf. nach Set gefiltert), card}].
+ * Reihenfolge: Länge → Trigramme → Levenshtein. */
+function matchName(nameText) {
   const t0 = performance.now();
   const idx = S.idx;
-  const q = norm(nameText);
+  const q = norm(stripSuffix(nameText));
   if (!idx || q.length < 3) return { ranked: [], ms: 0 };
-  const qt = trigrams(q), ql = q.length, nk = numKey(numText);
+  const qt = trigrams(q), ql = q.length, flt = S.setFilter;
   const hits = [];
-  for (let i = 0; i < idx.n; i++) {
-    const L = idx.lens[i];
+  for (let k = 0; k < idx.m; k++) {
+    const L = idx.lens[k];
     const maxL = L > ql ? L : ql;
     const maxD = Math.floor((1 - MIN_SIM) * maxL);
     if (Math.abs(L - ql) > maxD) continue;
-    const ti = idx.tris[i];
+    const ti = idx.tris[k];
     const inter = interCount(qt, ti);
     if (inter === 0 || (2 * inter) / (qt.length + ti.length) < 0.2) continue;
-    const d = lev(q, idx.names[i], maxD);
+    let mem = idx.members[k];
+    if (flt) { mem = mem.filter((i) => idx.cards[i].s === flt); if (!mem.length) continue; }
+    const d = lev(q, idx.bases[k], maxD);
     if (d > maxD) continue;
-    hits.push({ i, sim: 1 - d / maxL });
+    hits.push({ k, sim: 1 - d / maxL, mem });
   }
   hits.sort((a, b) => b.sim - a.sim);
-  const top = hits.slice(0, 12);
-  // Nummer verfeinert nur bei (fast) gleichen Namens-Treffern
-  if (nk >= 0 && top.length) {
-    const best = top[0].sim;
-    for (const h of top) if (h.sim >= best - 0.03 && idx.nums[h.i] === nk) h.sim = Math.min(1, h.sim + 0.03);
-    top.sort((a, b) => b.sim - a.sim);
-  }
-  return { ranked: top.slice(0, 10).map((h) => ({ card: idx.cards[h.i], score: h.sim })), ms: performance.now() - t0 };
+  return {
+    ranked: hits.slice(0, 10).map((h) => ({ base: idx.bases[h.k], score: h.sim, cards: h.mem.map((i) => idx.cards[i]), card: idx.cards[h.mem[0]] })),
+    ms: performance.now() - t0,
+  };
 }
 
 /* ============================================================
@@ -343,42 +414,50 @@ function pickSub(keys, foil) {
   if (keys.includes('Normal')) return 'Normal';
   return keys.find((k) => !/foil/i.test(k)) ?? keys[0];
 }
+// Preisart: gewählte zuerst, dann Ersatz in der Reihenfolge Markt → Mittel → Tiefst.
 function priceInfo(card, foil, pt = S.ui.priceType, cur = S.settings.currency) {
   const pe = S.data && S.data.prices && S.data.prices.prices ? S.data.prices.prices[card.p] : null;
   const keys = pe ? Object.keys(pe) : [];
   const sub = pickSub(keys, foil);
   const arr = pe && sub != null ? pe[sub] : null;
-  const raw = Array.isArray(arr) ? arr[PT_IDX[pt]] : null;
-  const usd = typeof raw === 'number' && isFinite(raw) ? raw : null;
+  let usd = null, used = pt;
+  if (Array.isArray(arr)) {
+    for (const t of [pt, ...PT_ORDER.filter((x) => x !== pt)]) {
+      const v = arr[PT_IDX[t]];
+      if (typeof v === 'number' && isFinite(v)) { usd = v; used = t; break; }
+    }
+  }
   let value = null, note = '';
   if (usd != null) {
     const rate = cur === 'USD' ? 1 : (S.data && S.data.rates && S.data.rates.rates ? S.data.rates.rates[cur] : undefined);
     if (typeof rate === 'number') value = round2(usd * rate);
     else note = `kein Umrechnungskurs für ${cur}`;
   } else {
-    note = pe ? `kein Preis für ${sub}-Druck` : 'Keine Preisdaten für dieses Produkt';
+    note = pe ? `kein Preis für ${sub}-Druck` : card.p == null ? 'Kein TCGplayer-Produkt zu dieser Karte' : 'Keine Preisdaten für dieses Produkt';
   }
   return {
-    sub, single: keys.length === 1, isFoil: sub != null && /foil/i.test(sub), usd, value, pt, cur, note,
+    sub, single: keys.length === 1, isFoil: sub != null && /foil/i.test(sub), usd, value, pt: used, wanted: pt,
+    fallback: usd != null && used !== pt, cur, note,
     date: (S.data && S.data.prices && S.data.prices.priceDate) || (S.data && S.data.meta && S.data.meta.priceDate) || '',
   };
 }
 function priceBlockHtml(pi) {
   if (pi.value == null) return `<div class="price none">kein Preis</div><div class="src">${esc(pi.note)}</div>`;
-  return `<div class="price num">${esc(fmtMoney(pi.value, pi.cur))}</div><div class="src">${esc(priceLabel(pi.pt, pi.cur, pi.date))}</div>`;
+  return `<div class="price num">${esc(fmtMoney(pi.value, pi.cur))}</div><div class="src">${esc(priceLabel(pi.pt, pi.cur, pi.date, pi.wanted))}</div>`;
 }
 function priceShort(r) {
   return typeof r.price === 'number' ? esc(fmtMoney(r.price, r.currency)) : 'kein Preis';
 }
 
 /* Scan-Datensatz (Feldnamen exakt nach Spec, Abschnitt 1) */
-function buildRecord(card, { foil, cond, qty = 1, ocr = null }) {
+function buildRecord(card, { foil, cond, qty = 1, ocr = null, number = null, nameDe = null, matchInfo = null }) {
   const pi = priceInfo(card, foil);
-  const x = card.x || {};
   return {
     ts: new Date().toISOString(),
-    productId: card.p, name: card.n, set: card.s, setCode: card.sc, number: card.num, rarity: card.r, type: card.t,
-    cardClass: x.Class ?? null, faction: x.Faction ?? null, cost: x.Cost ?? null, atk: x.ATK ?? null, health: x.Health ?? null,
+    productId: card.p ?? null, key: card.k, name: card.n, nameDe: nameDe || null, set: card.s, setCode: card.sc || null, setWord: card.sw || null,
+    number: numStr(card) || number || null, total: card.tot ?? null, rarity: card.r ?? null, type: card.t ?? null,
+    cardClass: card.cls ?? null, cls: card.cls ?? null, faction: card.fac ?? null, race: card.race ?? null,
+    cost: card.cost ?? null, atk: card.atk ?? null, health: card.hp ?? null, hp: card.hp ?? null, matchInfo,
     foil: pi.sub != null ? pi.isFoil : !!foil,
     condition: cond, qty,
     priceUsd: pi.usd, price: pi.value, currency: pi.cur, priceType: pi.pt,
@@ -395,12 +474,15 @@ async function captureCard(card, opts = {}) {
   const foil = opts.foil ?? S.ui.foil;
   const cond = opts.cond ?? S.ui.cond;
   if (S.scans.length >= MAX_SCANS) { toast('Speicher voll: maximal 2000 Scans. Bitte Einträge löschen.', 'err'); return null; }
-  const rec = buildRecord(card, { foil, cond, qty: opts.qty || 1, ocr: opts.ocr ?? null });
+  const rec = buildRecord(card, { foil, cond, qty: opts.qty || 1, ocr: opts.ocr ?? null, number: opts.number || null, nameDe: opts.nameDe ? cleanDe(opts.nameDe) : null, matchInfo: opts.matchInfo || null });
   try {
     const res = await api('POST', 'api/scan', rec);
     rec.id = res.id;
+    S.lastWanted = { id: rec.id, wanted: S.ui.priceType };
     S.scans.unshift(rec);
     S.lastId = rec.id;
+    if (rec.nameDe) learn(rec.nameDe, card.k);
+    setPill(true, `Scanner online · ${S.scans.length} Scans`);
     feedback(rec);
     renderAll();
     return rec;
@@ -413,7 +495,7 @@ async function captureCard(card, opts = {}) {
 function feedback(rec) {
   try { navigator.vibrate && navigator.vibrate(60); } catch { /* ok */ }
   beep();
-  toast(`Erfasst: ${rec.name}${typeof rec.price === 'number' ? ' · ' + fmtMoney(rec.price, rec.currency) : ' · kein Preis'}`);
+  toast(`Erfasst: ${dispName(rec)}${typeof rec.price === 'number' ? ' · ' + fmtMoney(rec.price, rec.currency) : ' · kein Preis'}`);
 }
 function beep() {
   try {
@@ -428,7 +510,7 @@ function beep() {
 }
 
 /* ============================================================
- * OCR (Tesseract.js, ein Worker, lazy)
+ * OCR (Tesseract.js, je Sprache höchstens ein Worker, lazy): eng für Nummer/Werte, deu für den Namen
  * ============================================================ */
 function loadScript(src) {
   return new Promise((res, rej) => {
@@ -440,116 +522,370 @@ function loadScript(src) {
     document.head.append(s);
   });
 }
-function ensureOcr() {
-  if (S.worker) return Promise.resolve(S.worker);
-  if (!S.ocrP) {
-    S.ocrP = loadScript(TESS_URL)
-      .then(() => self.Tesseract.createWorker('eng', 1, {
-        workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js',
-        corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1',
-        langPath: 'https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng@1.0.0/4.0.0_best_int',
+const TESS = 'https://cdn.jsdelivr.net/npm/';
+function ensureOcr(lang) {
+  if (S.workers[lang]) return Promise.resolve(S.workers[lang]);
+  if (!S.ocrP[lang]) {
+    S.ocrP[lang] = loadScript(TESS_URL)
+      .then(() => self.Tesseract.createWorker(lang, 1, {
+        workerPath: TESS + 'tesseract.js@5.1.1/dist/worker.min.js',
+        corePath: TESS + 'tesseract.js-core@5.1.1',
+        langPath: `${TESS}@tesseract.js-data/${lang}@1.0.0/4.0.0_best_int`,
       }))
-      .then((w) => { S.worker = w; return w; })
-      .catch((e) => { S.ocrP = null; throw new Error(e.message); });
+      .then((w) => { S.workers[lang] = w; w.psm = ''; return w; })
+      .catch((e) => { S.ocrP[lang] = null; S.ocrFailed = true; throw new Error(e.message); });
   }
-  return S.ocrP;
+  return S.ocrP[lang];
 }
-// Kartenrahmen in Videokoordinaten (S.guide), Zuschnitt + Graustufen/Kontrast in Canvas
-const NAME_BOX = { x: 0.06, y: 0.08, w: 0.88, h: 0.14 };
-const NUM_BOX = { x: 0.08, y: 0.86, w: 0.84, h: 0.10 };
-const boxY = (box, off) => Math.min(Math.max(box.y + off / 100, 0), 1 - box.h);
-function cropTo(cv, box, off, targetW) {
-  const g = S.guide;
-  const sw = g.w * box.w, sh = g.h * box.h;
-  const sx = g.x + g.w * box.x, sy = g.y + g.h * boxY(box, off);
-  const video = $('#video');
+// Worker der Sprache, falls geladen; sonst Laden anstoßen und null liefern (der Frame läuft ohne OCR weiter).
+function ocrUsable(lang = 'eng') {
+  if (S.workers[lang]) return S.workers[lang];
+  if (!S.ocrFailed && !S.ocrP[lang]) {
+    ensureOcr(lang).then(() => setBanner('ocr', '', ''), (e) => setBanner('ocr', S.art ? 'warn' : 'err',
+      `Texterkennung nicht verfügbar (${e.message}). ${S.art ? 'Der Bildabgleich läuft weiter.' : 'Ohne Bilddaten ist keine automatische Erkennung möglich; Karten lassen sich über die Suche erfassen.'}`));
+  }
+  return null;
+}
+/* Bereiche relativ zur Karte (Breite/Höhe), kalibrierbar per Verschiebung in % (S.cal.off[r] = [dx, dy]). */
+const AZ = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const REG = {
+  name: { l: 'Name', x: 0.20, y: 0.05, w: 0.65, h: 0.06, lang: 'deu', psm: '7', wl: '', tw: 900 },
+  strip: { l: 'Nummer', x: 0.18, y: 0.955, w: 0.52, h: 0.04, lang: 'eng', psm: '7', wl: AZ + AZ.toLowerCase() + '0123456789/ ', tw: 900 },
+  cost: { l: 'Kosten', x: 0.03, y: 0.04, w: 0.13, h: 0.08, lang: 'eng', psm: '10', wl: '0123456789', tw: 120 },
+  atk: { l: 'Angriff', x: 0.03, y: 0.88, w: 0.12, h: 0.09, lang: 'eng', psm: '10', wl: '0123456789', tw: 120 },
+  hp: { l: 'Leben', x: 0.85, y: 0.88, w: 0.12, h: 0.09, lang: 'eng', psm: '10', wl: '0123456789', tw: 120 },
+};
+const REGS = Object.keys(REG);
+const ART_BOX = { x: 0.10, y: 0.14, w: 0.80, h: 0.42 };   // = REGION von artHash
+const CARD_W = 400, CARD_H = 558;                          // Kartenrahmen in Pixeln (wie _400w-Bilder)
+const clamp01 = (v, w) => Math.min(Math.max(v, 0), 1 - w);
+function regBox(r) {
+  const R = REG[r], o = S.cal.off[r] || [0, 0];
+  return { x: clamp01(R.x + o[0] / 100, R.w), y: clamp01(R.y + o[1] / 100, R.h), w: R.w, h: R.h };
+}
+// Ausschnitt aus dem Karten-Canvas: Graustufen, Kontrast, dunkler Grund wird invertiert (helle Ziffern in Kreisen)
+function cropFrom(src, cv, box, targetW) {
+  const sw = src.width * box.w, sh = src.height * box.h;
   const w = Math.round(targetW), h = Math.max(24, Math.round(targetW * sh / sw));
   cv.width = w; cv.height = h;
   const ctx = cv.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
+  ctx.drawImage(src, src.width * box.x, src.height * box.y, sw, sh, 0, 0, w, h);
   const im = ctx.getImageData(0, 0, w, h), d = im.data;
+  let sum = 0;
+  for (let i = 0; i < d.length; i += 4) sum += d[i] = d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11;
+  const inv = sum / (d.length / 4) < 110;
   for (let i = 0; i < d.length; i += 4) {
-    let v = d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11;
-    v = (v - 128) * 1.6 + 128;
+    let v = (d[i] - 128) * 1.6 + 128;
     v = v < 0 ? 0 : v > 255 ? 255 : v;
-    d[i] = d[i + 1] = d[i + 2] = v;
+    d[i] = d[i + 1] = d[i + 2] = inv ? 255 - v : v;
   }
   ctx.putImageData(im, 0, 0);
   return cv;
 }
-const cvName = $('#cvName'), cvNum = $('#cvNum');
+const regCv = (r) => $('#cv-' + r);
+async function ocrRegion(cv, r) {
+  const R = REG[r], w = ocrUsable(R.lang);
+  if (!w) return null;
+  cropFrom(cv, regCv(r), regBox(r), R.tw);
+  const key = R.psm + '|' + R.wl;
+  if (w.psm !== key) { await w.setParameters({ tessedit_pageseg_mode: R.psm, tessedit_char_whitelist: R.wl }); w.psm = key; }
+  const a = await w.recognize(regCv(r));
+  return String((a.data && a.data.text) || '').replace(/\s+/g, ' ').trim();
+}
+let cvCard = null;
+function cardCanvas() {
+  if (!cvCard) { cvCard = document.createElement('canvas'); cvCard.width = CARD_W; cvCard.height = CARD_H; }
+  return cvCard;
+}
 async function scanFrame() {
-  if (!S.guide || !S.worker) return;
-  cropTo(cvName, NAME_BOX, S.cal.nameOff, 900);
-  cropTo(cvNum, NUM_BOX, S.cal.numOff, 700);
-  const w = S.worker;
-  // Sequenziell: erst Name (ohne Whitelist), dann Nummer (Whitelist 0-9 und /)
-  await w.setParameters({ tessedit_pageseg_mode: '7', tessedit_char_whitelist: '' });
-  const a = await w.recognize(cvName);
-  await w.setParameters({ tessedit_pageseg_mode: '7', tessedit_char_whitelist: '0123456789/' });
-  const b = await w.recognize(cvNum);
-  const name = String((a.data && a.data.text) || '').replace(/\s+/g, ' ').trim();
-  const num = String((b.data && b.data.text) || '').trim();
-  const conf = (a.data && a.data.confidence) || 0;
-  const m = matchName(name, num);
-  S.dbg = { name, num, conf, top: m.ranked[0] || null };
+  if (!S.guide) return;
+  const cv = cardCanvas(), g = S.guide;
+  cv.getContext('2d', { willReadFrequently: true }).drawImage($('#video'), g.x, g.y, g.w, g.h, 0, 0, CARD_W, CARD_H);
+  await processCard(cv, true);
+}
+/* Bildindex: Produkte mit identischem Hash = dieselbe Illustration (Nachdrucke) → eine Gruppe. */
+function buildArtIndex() {
+  S.art = null;
+  const doc = S.data && S.data.hashes, AH = self.WowArtHash;
+  if (!AH || !doc || doc.algo !== AH.ALGO || !doc.hashes || !S.idx) return;
+  const pidIdx = new Map();
+  S.idx.cards.forEach((c, i) => pidIdx.set(String(c.p), i));
+  const groups = new Map();
+  for (const pid of Object.keys(doc.hashes)) {
+    const e = doc.hashes[pid], i = pidIdx.get(pid);
+    if (i == null || !Array.isArray(e) || !/^[0-9a-f]{64}$/.test(e[0]) || !/^[0-9a-f]{6}$/.test(e[1])) continue;
+    let g = groups.get(e[0]);
+    if (!g) groups.set(e[0], (g = { hash: e[0], color: e[1], mem: [] }));
+    g.mem.push(i);
+  }
+  const list = [...groups.values()], n = list.length;
+  const words = new Uint32Array(n * 8), rgb = new Uint8Array(n * 3), members = new Array(n);
+  list.forEach((g, k) => {
+    words.set(AH.hexWords(g.hash), k * 8);
+    const c = parseInt(g.color, 16);
+    rgb[k * 3] = (c >> 16) & 255; rgb[k * 3 + 1] = (c >> 8) & 255; rgb[k * 3 + 2] = c & 255;
+    members[k] = g.mem;
+  });
+  S.art = { n, words, rgb, members, count: list.reduce((a, g) => a + g.mem.length, 0) };
+}
+// Distanz = Hamming(256 Bit) + round(0,25·(|ΔR|+|ΔG|+|ΔB|)/8); Treffer bei ≤ Grenze und Abstand ≥ MATCH_MARGIN.
+function matchArt(a) {
+  const A = S.art, q = a.words, flt = S.setFilter, cards = S.idx.cards, top = [];
+  const r0 = a.rgb[0], g0 = a.rgb[1], b0 = a.rgb[2];
+  for (let k = 0; k < A.n; k++) {
+    let mem = A.members[k];
+    if (flt) { mem = mem.filter((i) => cards[i].s === flt); if (!mem.length) continue; }
+    const o = k * 8;
+    let h = 0;
+    for (let w = 0; w < 8; w++) {
+      let v = (A.words[o + w] ^ q[w]) >>> 0;
+      v -= (v >>> 1) & 0x55555555;
+      v = (v & 0x33333333) + ((v >>> 2) & 0x33333333);
+      h += Math.imul((v + (v >>> 4)) & 0x0f0f0f0f, 0x01010101) >>> 24;
+    }
+    const d = h + Math.round(0.25 * (Math.abs(A.rgb[k * 3] - r0) + Math.abs(A.rgb[k * 3 + 1] - g0) + Math.abs(A.rgb[k * 3 + 2] - b0)) / 8);
+    if (top.length < 6 || d < top[top.length - 1].d) {
+      let p = top.length < 6 ? top.length : 5;
+      while (p > 0 && top[p - 1].d > d) { top[p] = top[p - 1]; p--; }
+      top[p] = { d, mem };
+      if (top.length > 6) top.length = 6;
+    }
+  }
+  const best = top[0], second = top[1];
+  const margin = best && second ? second.d - best.d : null;
+  return {
+    ok: !!best && best.d <= S.cal.imgMax && (margin == null || margin >= MATCH_MARGIN),
+    best: best ? best.d : null, margin,
+    top: top.slice(0, 5).map((t) => ({ d: t.d, cards: t.mem.map((i) => cards[i]) })),
+  };
+}
+
+/* ============================================================
+ * Kombinierte Erkennung (docs/CARD_ID.md): Set+Nummer, Gesamtzahl, Werte, Bild, Name
+ * ============================================================ */
+const CAP_PTS = 70, CAP_LEAD = 20, SUGG_MIN = 20;
+const SWAP = { 5: '6', 6: '5', 1: '7', 7: '1', 0: '8', 8: '0' };   // häufige OCR-Verwechslungen
+function numVariants(n) {
+  const s = String(n), out = [];
+  for (let i = 0; i < s.length; i++) if (SWAP[s[i]]) out.push(+(s.slice(0, i) + SWAP[s[i]] + s.slice(i + 1)));
+  return out;
+}
+function parseStrip(t) {
+  const m = /([A-Za-z]{3,})?\s*(\d{1,3})\s*\/\s*(\d{2,3})/.exec(String(t || ''));
+  return m ? { word: m[1] || '', num: +m[2], tot: +m[3] } : null;
+}
+// Set-Wort unscharf (Levenshtein ≤ 2), ohne Treffer über die Gesamtzahl
+function findSets(st) {
+  const L = S.idx.setList, w = norm(st.word).replace(/ /g, '');
+  let best = 3, out = [];
+  if (w.length >= 3) for (const s of L) {
+    if (!s.w) continue;
+    const d = Math.min(lev(w, s.w, 2), s.w2 && s.w2.length >= 4 ? lev(w, s.w2, 2) : 9);   // mehrteilige Set-Wörter: letztes Wort reicht
+    if (d < best) { best = d; out = [s]; } else if (d === best) out.push(s);
+  }
+  return out.length ? out : L.filter((s) => s.tot === st.tot);
+}
+const statNum = (t) => { const m = /\d{1,2}/.exec(t || ''); return m ? +m[0] : null; };
+const cleanDe = (t) => String(t || '').replace(/[^A-Za-zÄÖÜäöüß' -]+/g, ' ').replace(/\s+/g, ' ').trim();
+// Gleiche Karte, anderes Produkt: gleiches Set, gleiche Nummer, gleicher Grundname
+const sameCard = (a, b) => a.s === b.s && numStr(a) != null && numStr(a) === numStr(b) && baseKey(a) === baseKey(b);
+const variantsOf = (card) => (S.idx ? S.idx.cards.filter((c) => c !== card && sameCard(c, card)) : []);
+
+/* Gelernte deutsche Namen: { "Hulok Wegbereiter": "<k>" } in localStorage, Abgleich normalisiert/unscharf */
+function learnedMap() {
+  if (!S.learnN) S.learnN = new Map(Object.entries(S.learned).map(([de, k]) => [norm(de), k]));
+  return S.learnN;
+}
+function learnedK(de) {
+  const q = norm(de), M = learnedMap();
+  if (q.length < 3) return null;
+  if (M.has(q)) return M.get(q);
+  for (const [n, k] of M) if (lev(q, n, Math.floor(q.length * 0.15)) <= Math.floor(q.length * 0.15)) return k;
+  return null;
+}
+const learnedDe = (k) => Object.keys(S.learned).find((de) => S.learned[de] === k) || null;
+function learn(de, k) {
+  de = cleanDe(de);
+  if (norm(de).length < 3 || !k || learnedK(de) === k) return;   // schon (auch unscharf) bekannt
+  for (const x of Object.keys(S.learned)) if (norm(x) === norm(de)) delete S.learned[x];
+  S.learned[de] = k; S.learnN = null;
+  lsSet(LS_LEARN, S.learned);
+}
+
+/* Punkte je Kandidat: Nr exakt 60 (Ziffernkorrektur 40), Gesamtzahl +10, Wert +10/−30,
+ * Bild +max(0, 30 − d/3), gelernter Name +40, englischer Name ≥ 0,8 +20. */
+function score(res, raw) {
+  const C = new Map(), idx = S.idx, flt = S.setFilter;
+  const add = (card, pts, tag) => {
+    if (flt && card.s !== flt) return null;
+    let c = C.get(card.k);
+    if (!c) C.set(card.k, (c = { card, pts: 0, sig: [] }));
+    c.pts += pts; c.sig.push(tag);
+    return c;
+  };
+  const st = parseStrip(raw.strip);
+  if (st) for (const s of findSets(st)) {
+    for (const i of idx.byNum.get(s.key + '|' + st.num) || []) add(idx.cards[i], 60, 'Nr');
+    for (const v of numVariants(st.num)) for (const i of idx.byNum.get(s.key + '|' + v) || []) add(idx.cards[i], 40, 'Nr~');
+  }
+  if (res) for (const t of res.top) {
+    if (t.d > S.cal.imgMax) continue;
+    for (const card of t.cards) {
+      const c = add(card, Math.max(0, 30 - t.d / 3), 'Bild');
+      if (c) { c.d = t.d; c.imgSure = res.ok && t === res.top[0] && t.cards.every((x) => x === card || sameCard(x, card)); }
+    }
+  }
+  const de = cleanDe(raw.name);
+  if (de.length >= 3) {
+    const k = learnedK(de), card = k && idx.byK.get(k);
+    if (card) add(card, 40, 'DE');
+    for (const r of matchName(de).ranked) if (r.score >= 0.8) for (const card of r.cards) add(card, 20, 'EN');
+  }
+  const sv = { cost: statNum(raw.cost), atk: statNum(raw.atk), hp: statNum(raw.hp) };
+  for (const c of C.values()) {
+    if (st && c.card.tot === st.tot) { c.pts += 10; c.sig.push('Ges'); }
+    // Werte wie in SpectralKitten (0 = oft nicht aufgedruckt): Angriff/Leben nur bei Verbündeten, Kosten nicht bei Helden
+    const t = c.card.t || '', ally = !t || /ally/i.test(t);
+    for (const f in sv) {
+      const v = sv[f], cv = c.card[f];
+      if (v == null || cv == null || (f === 'cost' ? /hero/i.test(t) : !ally)) continue;
+      if (v === cv) { c.pts += 10; c.sig.push(f); } else { c.pts -= 30; c.contra = true; c.sig.push('!' + f); }
+    }
+  }
+  let ranked = [...C.values()].sort((a, b) => b.pts - a.pts), top = ranked[0], others = ranked.slice(1);
+  // Gleichstand Grundprodukt ↔ Variante derselben Karte („… (LOOT)“, gleiche Nummer): Grundprodukt wählen
+  if (top) {
+    const grp = ranked.filter((x) => (x === top || sameCard(x.card, top.card)) && top.pts - x.pts <= 5);
+    const base = grp.length > 1 && grp.find((x) => x.card.n === stripSuffix(x.card.n));
+    if (base) {
+      top = base; base.sig.push('Basis');
+      others = ranked.filter((x) => !grp.includes(x));
+      ranked = [base, ...grp.filter((x) => x !== base), ...others];
+    }
+  }
+  const lead = top ? top.pts - (others[0] ? others[0].pts : 0) : 0;
+  // Erfassen: ≥ 70 Punkte und ≥ 20 Vorsprung; oder eindeutiger Bildtreffer (IMAGE_MATCH) ohne Widerspruch
+  const sure = !!top && ((top.pts >= CAP_PTS && lead >= CAP_LEAD) || (!!top.imgSure && !top.contra && lead > 0));
+  return { ranked, sure, lead, st, de };
+}
+const sigText = (c) => `${c.sig.join(' ')} = ${Math.round(c.pts)}`;
+
+/* Ein Kartenbild auswerten. Bild zuerst; OCR nur solange nicht eindeutig: Nummer, dann Werte,
+ * Name (deu) höchstens jeden 2. Frame. inj: OCR-Rohtexte je Bereich (Tests), ersetzt die OCR. */
+async function processCard(cv, feed = true, inj = null) {
+  const t0 = performance.now();
+  let res = null;
+  S.frameNo = (S.frameNo || 0) + 1;
+  if (S.art && cv) {
+    const im = cv.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, cv.width, cv.height);
+    res = matchArt(self.WowArtHash.artHash(im.data, cv.width, cv.height, 4));
+  }
+  const ms = performance.now() - t0;
+  S.dbgArt = { res, ms };
+  if (S.cal.debug && cv) drawArtDebug(cv);
+  const raw = {};
+  let m;
+  if (inj) { for (const r of REGS) raw[r] = inj[r] || ''; m = score(res, raw); }
+  else {
+    m = score(res, raw);
+    const read = async (r) => { raw[r] = (await ocrRegion(cv, r)) || ''; };
+    if (!m.sure && ocrUsable('eng')) {
+      await read('strip'); m = score(res, raw);
+      if (!m.sure) { await read('cost'); await read('atk'); await read('hp'); m = score(res, raw); }
+    }
+    if (!m.sure && S.frameNo % 2 === 0 && ocrUsable('deu')) { await read('name'); m = score(res, raw); }
+  }
+  S.dbg = { raw, m };
   renderDbg();
-  await onFrame(m, name, num, conf);
+  const ctx = {
+    nameDe: m.de || null, number: m.st ? `${m.st.num}/${m.st.tot}` : null,
+    readName: inj || !cv ? null : async () => { const t = cleanDe(await ocrRegion(cv, 'name')); return t || null; },
+  };
+  if (feed) await onFrame(m, ctx);
+  const out = (c) => ({ k: c.card.k, pid: c.card.p, name: c.card.n, pts: Math.round(c.pts), sig: c.sig.join(' ') });
+  return {
+    ok: !!(res && res.ok), sure: m.sure, via: m.ranked[0] ? m.ranked[0].sig.join(' ') : '', lead: Math.round(m.lead), ms,
+    best: res && res.top[0] ? { pid: res.top[0].cards[0].p, d: res.top[0].d, printings: res.top[0].cards.map((c) => c.p) } : null,
+    top: res ? res.top.map((t) => ({ pid: t.cards[0].p, d: t.d })) : [], margin: res ? res.margin : null,
+    cand: m.ranked.slice(0, 5).map(out),
+  };
+}
+function drawArtDebug(src) {
+  const c = $('#cvArt'), b = self.WowArtHash.regionBox(src.width, src.height);
+  c.width = b[2] - b[0]; c.height = b[3] - b[1];
+  c.getContext('2d').drawImage(src, b[0], b[1], c.width, c.height, 0, 0, c.width, c.height);
 }
 function renderDbg() {
   $('#dbg').hidden = !S.cal.debug;
-  if (!S.cal.debug || !S.dbg) return;
-  const d = S.dbg;
-  $('#dbgTxt').textContent = `Name roh: "${d.name}" (Konfidenz ${Math.round(d.conf)})\n`
-    + `Nummer roh: "${d.num}"\n`
-    + `Treffer: ${d.top ? `${d.top.card.n} (${Math.round(d.top.score * 100)} %)` : '–'}`;
+  if (!S.cal.debug) return;
+  const L = [], a = S.dbgArt, d = S.dbg;
+  if (a && a.res) {
+    const r = a.res;
+    L.push(`Bild: ${r.ok ? 'Treffer' : 'nicht eindeutig'} · beste Distanz ${r.best ?? '–'} (Grenze ${S.cal.imgMax}) · Abstand ${r.margin ?? '–'} (nötig ${MATCH_MARGIN}) · ${a.ms.toFixed(1)} ms`);
+    r.top.slice(0, 3).forEach((t, i) => L.push(`  ${i + 1}. ${t.cards[0].n} · ${setName(t.cards[0].s, t.cards[0].sc)}${t.cards.length > 1 ? ` (+${t.cards.length - 1} Druck/e)` : ''}: ${t.d}`));
+  } else if (a) L.push('Bild: keine Bilddaten');
+  if (d) {
+    for (const r of REGS) { const el = $('#raw-' + r); if (el) el.textContent = d.raw[r] == null ? '–' : `„${d.raw[r]}“`; }
+    L.push(`Kandidaten (Erfassen ab ${CAP_PTS} P. und ${CAP_LEAD} Vorsprung): ${d.m.sure ? 'eindeutig' : 'unsicher'}`);
+    d.m.ranked.slice(0, 3).forEach((c, i) => L.push(`  ${i + 1}. ${c.card.n} · ${setName(c.card.s, c.card.sc)} ${numPart(numStr(c.card))}: ${sigText(c)}`));
+  }
+  $('#dbgTxt').textContent = L.join('\n');
 }
 
-/* Stabilitätsregel: gleiche Karte in 2 aufeinanderfolgenden Frames (>= 0,8) erfassen;
- * danach gesperrt, bis 2 Frames lang keine bzw. eine andere Karte erkannt wurde. */
-async function onFrame(m, name, num, conf) {
+/* Stabilitätsregel: gleiche Karte (k) in 2 aufeinanderfolgenden eindeutigen Frames erfassen;
+ * danach gesperrt, bis 2 Frames lang eine andere bzw. keine Karte erkannt wurde. */
+async function onFrame(m, ctx) {
   const c = m.ranked[0];
-  const sc = c ? c.score : 0;
-  const pct = Math.round(sc * 100);
   if (S.locked !== null) {
-    if (c && c.card.p === S.locked && sc >= 0.6) { S.others = 0; setLive(`Erfasst: ${c.card.n}. Nächste Karte auflegen.`); return; }
+    if (c && c.card.k === S.locked && c.pts >= SUGG_MIN) { S.others = 0; setLive(`Erfasst: ${c.card.n}. Nächste Karte auflegen.`); return; }
     if (++S.others < 2) return;
     S.locked = null; S.others = 0;
   }
-  if (c && sc >= 0.8) {
-    if (S.streakPid === c.card.p) S.streak++;
-    else { S.streakPid = c.card.p; S.streak = 1; }
+  if (c && m.sure) {
+    if (S.streakPid === c.card.k) { S.streak++; S.lastDe = ctx.nameDe || S.lastDe; }
+    else { S.streakPid = c.card.k; S.streak = 1; S.lastDe = ctx.nameDe; }
     hideSuggest();
     if (S.streak >= 2) {
       S.streak = 0; S.streakPid = null;
-      S.locked = c.card.p; S.others = 0;
+      S.locked = c.card.k; S.others = 0;
       setLive(`Erkannt: ${c.card.n}`);
-      const rec = await captureCard(c.card, { ocr: Math.round(conf) });
+      let de = ctx.nameDe || S.lastDe;
+      if (!de && ctx.readName) de = await ctx.readName().catch(() => null);
+      const rec = await captureCard(c.card, { nameDe: de, number: ctx.number, matchInfo: { signals: c.sig, score: Math.round(c.pts), lead: Math.round(m.lead) } });
       if (!rec) S.locked = null;
       return;
     }
-    setLive(`Erkannt: ${c.card.n} (${pct} %), Bestätigung …`);
+    setLive(`Erkannt: ${c.card.n} (${Math.round(c.pts)} P.), Bestätigung …`);
     return;
   }
   S.streak = 0; S.streakPid = null;
-  if (c && sc >= 0.6) {
-    setLive(`Unsicher: ${pct} % – bitte Vorschlag wählen`);
-    showSuggest(m.ranked.filter((r) => r.score >= 0.6).slice(0, 3));
+  const list = m.ranked.filter((r) => r.pts >= SUGG_MIN).slice(0, 3);
+  if (list.length) {
+    const multi = list.length > 1 && list.every((r) => baseKey(r.card) === baseKey(c.card));
+    setLive(multi ? `${stripSuffix(c.card.n)}: ${list.length} Drucke – bitte Set wählen` : `Unsicher (${Math.round(c.pts)} P.) – bitte Vorschlag wählen`);
+    showSuggest(list, multi ? 'Diese Karte gibt es in mehreren Sets. Tippe den richtigen Druck an:' : 'Unsicher erkannt. Tippe die richtige Karte an:', ctx);
   } else {
     hideSuggest();
-    setLive(name ? `Gelesen: „${name}“` : 'Suche Karte …');
+    setLive(ctx.nameDe ? `Gelesen: „${ctx.nameDe}“` : 'Suche Karte …');
   }
 }
 
-function showSuggest(list) {
-  S.sugg = list;
-  $('#chips').innerHTML = list.map((r, i) => `<button class="chip" type="button" data-si="${i}">
-      ${esc(r.card.n)}<b>${Math.round(r.score * 100)} %</b>
-      <small>${esc(r.card.s)} · #${esc(r.card.num)} · ${esc(priceShort({ price: priceInfo(r.card, S.ui.foil).value, currency: S.settings.currency }))}</small></button>`).join('');
+// Vorschläge „Name · Set · Preis“; unverändert gebliebene Liste nicht neu zeichnen (Antippen bleibt stabil).
+function showSuggest(list, title, ctx = {}) {
+  const key = list.map((r) => r.card.k).join(',');
+  S.sugg = list; S.suggCtx = ctx;
+  $('#suggTitle').textContent = title;
+  if (key !== S.suggKey || $('#suggest').hidden) {
+    S.suggKey = key;
+    $('#chips').innerHTML = list.map((r, i) => {
+      const pi = priceInfo(r.card, S.ui.foil);
+      return `<button class="chip" type="button" data-si="${i}">${esc(r.card.n)}<b>${Math.round(r.pts)} P.</b>
+      <small>${esc(metaLine(setName(r.card.s, r.card.sc), numPart(numStr(r.card)), pi.value == null ? 'kein Preis' : fmtMoney(pi.value, pi.cur) + (pi.fallback ? ' (' + PT_LABEL[pi.pt] + ')' : '')))}</small></button>`;
+    }).join('');
+  }
   $('#suggest').hidden = list.length === 0;
 }
-function hideSuggest() { $('#suggest').hidden = true; S.sugg = []; }
-
+function hideSuggest() { $('#suggest').hidden = true; S.sugg = []; S.suggKey = ''; }
 function layoutGuide() {
   const cam = $('#cam'), video = $('#video'), g = $('#guide');
   const cw = cam.clientWidth, ch = cam.clientHeight, vw = video.videoWidth, vh = video.videoHeight;
@@ -561,12 +897,13 @@ function layoutGuide() {
   const s = Math.max(cw / vw, ch / vh);
   const ox = (cw - vw * s) / 2, oy = (ch - vh * s) / 2;
   S.guide = { x: (gx - ox) / s, y: (gy - oy) / s, w: gw / s, h: gh / s };
-  placeBox($('#boxName'), NAME_BOX, S.cal.nameOff, gx, gy, gw, gh);
-  placeBox($('#boxNum'), NUM_BOX, S.cal.numOff, gx, gy, gw, gh);
+  for (const r of REGS) placeBox($('#box-' + r), regBox(r), gx, gy, gw, gh);
+  placeBox($('#boxArt'), ART_BOX, gx, gy, gw, gh);
 }
-function placeBox(el, box, off, gx, gy, gw, gh) {
-  Object.assign(el.style, { left: gx + gw * box.x + 'px', top: gy + gh * boxY(box, off) + 'px', width: gw * box.w + 'px', height: gh * box.h + 'px' });
+function placeBox(el, b, gx, gy, gw, gh) {
+  Object.assign(el.style, { left: gx + gw * b.x + 'px', top: gy + gh * b.y + 'px', width: gw * b.w + 'px', height: gh * b.h + 'px' });
 }
+const showBoxes = (on) => $$('#cam .cal-box').forEach((el) => { el.hidden = !on; });
 
 function camErrText(e) {
   switch (e && e.name) {
@@ -618,28 +955,22 @@ async function startScan() {
   $('#btnScan').textContent = 'Scan stoppen';
   $('#btnScan').setAttribute('aria-pressed', 'true');
   $('#guide').hidden = false;
-  $('#boxName').hidden = false; $('#boxNum').hidden = false;
+  showBoxes(true);
   layoutGuide();
   renderDbg();
   keepAwake(true);
-  setLive('Lade Texterkennung (einmalig, ca. 2 MB) …');
-  try {
-    await ensureOcr();
-    setBanner('ocr', '', '');
-  } catch (e) {
-    setLive('');
-    setBanner('ocr', 'err', `Texterkennung nicht verfügbar (${e.message}). Die Kamera läuft weiter; Karten lassen sich über die Suche erfassen.`);
-    return;
-  }
-  if (!S.scanning) return;
-  setLive('Suche Karte …');
+  S.ocrFailed = false;
+  setBanner('ocr', '', '');
+  ocrUsable('eng');   // Nummer und Werte: Texterkennung im Hintergrund laden
+  if (!S.art) setLive('Lade Texterkennung (einmalig) …');
+  else setLive('Karte in den Rahmen legen …');
   startLoop();
 }
 function startLoop() {
   const id = ++S.loopId;
   const step = async () => {
     if (!S.scanning || id !== S.loopId) return;
-    if (!S.busy && S.worker && $('#video').videoWidth) {
+    if (!S.busy && $('#video').videoWidth) {
       S.busy = true;
       try { await scanFrame(); } catch (e) { console.warn('Frame-Fehler', e); }
       finally { S.busy = false; }
@@ -657,7 +988,7 @@ function stopScan() {
   const v = $('#video');
   v.srcObject = null; v.hidden = true;
   $('#guide').hidden = true;
-  $('#boxName').hidden = true; $('#boxNum').hidden = true;
+  showBoxes(false);
   $('#btnScan').textContent = 'Scan starten';
   $('#btnScan').setAttribute('aria-pressed', 'false');
   setLive('');
@@ -733,7 +1064,7 @@ function summarize(list) {
     out.count += q;
     if (tot == null) out.noPrice += q; else out.total += tot;
     add(out.bySet, r.setCode || r.set || '?', r.set || r.setCode || '?', q, tot);
-    add(out.byRar, r.rarity || '–', r.rarity || '–', q, tot);
+    add(out.byRar, r.rarity || '–', rarityName(r.rarity) || '–', q, tot);
     if (unit != null) out.priced.push({ r, unit });
   }
   out.total = round2(out.total);
@@ -747,23 +1078,27 @@ function groupRows(map) {
     <td class="num">${esc(fmtMoney(round2(g.v), S.settings.currency))}</td></tr>`).join('')
     || '<tr><td colspan="3" class="muted">Keine Daten</td></tr>';
 }
+function sourceSummary() {
+  const cur = S.settings.currency;
+  return `TCGplayer-Preis (US), gewählt: ${PT_LABEL[S.ui.priceType]} (fehlt er, Ersatz Markt → Mittel → Tiefst; je Eintrag gespeichert)${cur === 'USD' ? '' : ', umgerechnet'}, Stand ${fmtDate(S.data && S.data.prices ? S.data.prices.priceDate : '')}`;
+}
 function renderColl() {
   const cur = S.settings.currency;
   const sm = summarize(S.scans);
   $('#totals').innerHTML = `
     <div class="stat"><div class="big num">${sm.count}</div><div class="lbl">Karten gesamt (${S.scans.length} Einträge)</div></div>
     <div class="stat"><div class="big num">${esc(fmtMoney(sm.total, cur))}</div><div class="lbl">Gesamtwert in ${esc(cur)}</div></div>
-    <div class="stat wide"><div class="lbl">Preisart: ${esc(PT_LABEL[S.ui.priceType])}. Quelle: ${esc(priceLabel(S.ui.priceType, cur, S.data && S.data.prices ? S.data.prices.priceDate : ''))}.${sm.noPrice ? ` ${sm.noPrice} Karte(n) ohne Preis, nicht gezählt.` : ''}</div></div>`;
+    <div class="stat wide"><div class="lbl">Quelle: ${esc(sourceSummary())}.${sm.noPrice ? ` ${sm.noPrice} Karte(n) ohne Preis, nicht gezählt.` : ''}</div></div>`;
   $('#tSet').innerHTML = groupRows(sm.bySet);
   $('#tRar').innerHTML = groupRows(sm.byRar);
-  $('#top10').innerHTML = sm.priced.slice(0, 10).map(({ r, unit }) => `<li>${esc(r.name)} <span class="muted">${esc(r.set)} · #${esc(r.number)}${r.foil ? ' · Foil' : ''}</span> – <strong>${esc(fmtMoney(unit, cur))}</strong></li>`).join('')
+  $('#top10').innerHTML = sm.priced.slice(0, 10).map(({ r, unit }) => `<li>${esc(dispName(r))} <span class="muted">${esc(metaLine(setName(r.set, r.setCode), numPart(r.number), r.foil ? 'Foil' : ''))}</span> – <strong>${esc(fmtMoney(unit, cur))}</strong></li>`).join('')
     || '<li class="muted">Noch keine bepreisten Karten.</li>';
   $('#scanList').innerHTML = S.scans.map((r) => itemHtml(r, true)).join('')
     || '<li class="muted">Noch keine Scans. Erfasse Karten im Tab „Scannen“ oder über die Suche.</li>';
 }
 
-const CSV_HEAD = ['id', 'Zeitstempel', 'Name', 'Set', 'Set-Kürzel', 'Nummer', 'Seltenheit', 'Typ', 'Klasse', 'Fraktion', 'Kosten', 'ATK', 'Leben',
-  'Foil', 'Zustand', 'Menge', 'Preis USD', 'Preis', 'Währung', 'Preisart', 'Preisdatum', 'Quelle', 'URL', 'Bild-URL', 'OCR-Konfidenz', 'Wert gesamt'];
+const CSV_HEAD = ['id', 'Zeitstempel', 'Name', 'Name (deutsch)', 'Schlüssel', 'Set', 'Set-Kürzel', 'Nummer', 'Seltenheit', 'Typ', 'Klasse', 'Fraktion', 'Kosten', 'ATK', 'Leben',
+  'Rasse', 'Foil', 'Zustand', 'Menge', 'Preis USD', 'Preis', 'Währung', 'Preisart', 'Preisdatum', 'Quelle', 'URL', 'Bild-URL', 'OCR-Konfidenz', 'Erkennung', 'Wert gesamt'];
 function csvCell(v) {
   if (v === null || v === undefined) return '';
   const s = String(v);
@@ -780,9 +1115,10 @@ function makeCsv(list) {
     const comma = EURO_COMMA.has(r.currency);
     const total = typeof r.price === 'number' ? csvNum(r.price * (r.qty || 1), comma) : '';
     lines.push([
-      r.id, r.ts, r.name, r.set, r.setCode, r.number, r.rarity, r.type, r.cardClass, r.faction, r.cost, r.atk, r.health,
-      r.foil ? 'ja' : 'nein', r.condition, r.qty, csvNum(r.priceUsd, comma), csvNum(r.price, comma), r.currency,
-      PT_LABEL[r.priceType] || r.priceType, r.priceDate, r.source, r.url, r.imageUrl, r.ocrConfidence, total,
+      r.id, r.ts, r.name, r.nameDe, r.key, r.set, r.setCode, r.number, rarityName(r.rarity), r.type, r.cls ?? r.cardClass, r.faction, r.cost, r.atk, r.hp ?? r.health,
+      r.race, r.foil ? 'ja' : 'nein', r.condition, r.qty, csvNum(r.priceUsd, comma), csvNum(r.price, comma), r.currency,
+      PT_LABEL[r.priceType] || r.priceType, r.priceDate, r.source, r.url, r.imageUrl, r.ocrConfidence,
+      r.matchInfo ? `${(r.matchInfo.signals || []).join(' ')} = ${r.matchInfo.score}` : '', total,
     ].map(csvCell).join(';'));
   }
   return '\uFEFF' + lines.join('\r\n') + '\r\n';
@@ -801,7 +1137,7 @@ function makeReport() {
     `Gesamtwert: ${fmtMoney(sm.total, cur)}`,
   ];
   if (sm.noPrice) L.push(`Ohne Preis: ${sm.noPrice} Karte(n), nicht gezählt`);
-  L.push(`Preisquelle: ${priceLabel(S.ui.priceType, cur, S.data && S.data.prices ? S.data.prices.priceDate : '')}`, '');
+  L.push(`Preisquelle: ${sourceSummary()}`, '');
   const block = (title, map) => {
     L.push(title);
     for (const g of [...map.values()].sort((a, b) => b.v - a.v)) L.push(`  ${g.label}: ${g.q} Stk., ${fmtMoney(round2(g.v), cur)}`);
@@ -810,7 +1146,7 @@ function makeReport() {
   block('Pro Set:', sm.bySet);
   block('Pro Seltenheit:', sm.byRar);
   L.push('Top 10 teuerste (Einzelpreis):');
-  sm.priced.slice(0, 10).forEach(({ r, unit }, i) => L.push(`  ${i + 1}. ${r.name} (${r.set} #${r.number}${r.foil ? ', Foil' : ''}) – ${fmtMoney(unit, cur)}`));
+  sm.priced.slice(0, 10).forEach(({ r, unit }, i) => L.push(`  ${i + 1}. ${dispName(r)} (${metaLine(setName(r.set, r.setCode), numPart(r.number), r.foil ? 'Foil' : '')}) – ${fmtMoney(unit, cur)}`));
   return L.join('\n') + '\n';
 }
 function deliver(blob, name) {
@@ -849,14 +1185,14 @@ function itemHtml(r, coll) {
   return `<li class="item" data-id="${r.id}">
     ${img ? `<img class="thumb" src="${esc(img)}" alt="" loading="lazy">` : '<div class="thumb" aria-hidden="true"></div>'}
     <div>
-      <div class="name">${esc(r.name)}</div>
-      <div class="sub">${esc(r.set)} · #${esc(r.number)} · ${esc(r.rarity)}${r.foil ? ' · Foil' : ''} · ${esc(r.condition)}</div>
+      <div class="name">${esc(dispName(r))}</div>
+      <div class="sub">${esc(metaLine(setName(r.set, r.setCode), numPart(r.number), rarityName(r.rarity), statLine(r), r.foil ? 'Foil' : '', r.condition))}</div>
       ${coll
         ? `<div class="qty"><button class="btn sm" type="button" data-act="dec" data-id="${r.id}" aria-label="Menge verringern">&minus;</button><output aria-label="Menge">${r.qty}</output><button class="btn sm" type="button" data-act="inc" data-id="${r.id}" aria-label="Menge erhöhen">+</button></div>`
         : `<div class="sub">Menge ${r.qty}</div>`}
     </div>
     <div class="amt ${typeof r.price === 'number' ? '' : 'none'}">${priceShort(r)}
-      ${typeof r.price === 'number' ? '<div class="sub">je Karte</div>' : ''}
+      ${typeof r.price === 'number' ? `<div class="sub">je Karte${r.priceType && r.priceType !== 'market' ? ' · ' + esc(PT_LABEL[r.priceType] || r.priceType) : ''}</div>` : ''}
       ${coll ? `<div><button class="btn danger del" type="button" data-act="del" data-id="${r.id}">Löschen</button></div>` : ''}
     </div>
   </li>`;
@@ -866,17 +1202,34 @@ function renderScan() {
   const rec = S.scans.find((r) => r.id === S.lastId);
   if (!rec) { el.hidden = true; el.innerHTML = ''; return; }
   const img = safeUrl(rec.imageUrl);
-  const pi = { value: typeof rec.price === 'number' ? rec.price : null, cur: rec.currency, pt: rec.priceType, date: rec.priceDate, note: rec.priceUsd == null ? 'Keine Preisdaten für dieses Produkt' : 'Kein Umrechnungskurs' };
+  const wanted = S.lastWanted && S.lastWanted.id === rec.id ? S.lastWanted.wanted : rec.priceType;
+  const pi = { value: typeof rec.price === 'number' ? rec.price : null, cur: rec.currency, pt: rec.priceType, wanted, date: rec.priceDate, note: rec.priceUsd != null ? 'Kein Umrechnungskurs' : rec.productId == null ? 'Kein TCGplayer-Produkt zu dieser Karte' : 'Keine Preisdaten für dieses Produkt' };
   el.hidden = false;
   el.innerHTML = `
     ${img ? `<img src="${esc(img)}" alt="" loading="lazy">` : '<div class="thumb" aria-hidden="true"></div>'}
     <div>
-      <h3>${esc(rec.name)}</h3>
-      <div class="sub">${esc(rec.set)} · #${esc(rec.number)} · ${esc(rec.rarity)}</div>
+      <h3>${esc(dispName(rec))}</h3>
+      <div class="sub">${esc(metaLine(setName(rec.set, rec.setCode), numPart(rec.number), rarityName(rec.rarity)))}</div>
+      <div class="sub">${esc(metaLine(rec.type, statLine(rec), rec.race, rec.cls || rec.cardClass, rec.faction))}</div>
       <div>${rec.foil ? '<span class="badge">Foil</span>' : ''}<span class="badge">${esc(rec.condition)}</span><span class="badge">Menge ${rec.qty}</span></div>
       ${priceBlockHtml(pi)}
     </div>
-    <div class="row-actions"><button class="btn primary" type="button" data-act="plus1">+1 (Menge erhöhen)</button></div>`;
+    <div class="row-actions"><button class="btn primary" type="button" data-act="plus1">+1 (Menge erhöhen)</button>
+    ${variantsFor(rec).map((c) => `<button class="chip sm" type="button" data-var="${esc(c.k)}">Variante ändern: ${esc(c.n)}</button>`).join('')}</div>`;
+}
+function variantsFor(rec) {
+  const card = S.idx && rec.key ? S.idx.byK.get(rec.key) : null;
+  return card ? variantsOf(card).slice(0, 4) : [];
+}
+// Variante wechseln: die API kann nur die Menge ändern → Eintrag löschen und als anderes Produkt neu anlegen
+async function switchVariant(k) {
+  const rec = S.scans.find((r) => r.id === S.lastId), card = S.idx && S.idx.byK.get(k);
+  if (!rec || !card) return;
+  try { await api('DELETE', `api/scans?id=${rec.id}`); } catch (e) { toast(`Wechsel fehlgeschlagen: ${e.message}`, 'err'); return; }
+  S.scans = S.scans.filter((r) => r.id !== rec.id);
+  if (S.locked === rec.key) S.locked = k;
+  const mi = rec.matchInfo ? { ...rec.matchInfo, signals: [...(rec.matchInfo.signals || []), 'Variante'] } : { signals: ['Variante'] };
+  await captureCard(card, { foil: rec.foil, cond: rec.condition, qty: rec.qty, nameDe: rec.nameDe, number: rec.number, matchInfo: mi });
 }
 function renderRecent() {
   $('#recent').innerHTML = S.scans.slice(0, 5).map((r) => itemHtml(r, false)).join('')
@@ -886,7 +1239,12 @@ function renderScanInfo() {
   if (!S.data) { setInfo('Keine Kartendaten geladen.'); return; }
   const n = S.data.cards.cards ? S.data.cards.cards.length : 0;
   const date = (S.data.prices && S.data.prices.priceDate) || S.data.meta.priceDate;
-  setInfo(`${n} Karten · Preise Stand ${fmtDate(date)} · Währung ${S.settings.currency} · Abgleich gegen englische Namen`);
+  setInfo(`${n} Karten · Preise Stand ${fmtDate(date)} · Währung ${S.settings.currency}${S.setFilter ? ' · Set-Filter: ' + S.setFilter : ''} · Erkennung: Set+Nummer, Werte, ${S.art ? `Bild (${S.art.count})` : 'ohne Bild'}, Name (${Object.keys(S.learned).length} deutsche gelernt) · Namen englisch`);
+}
+function renderSetFilter() {
+  const sel = $('#setFilter');
+  sel.innerHTML = '<option value="">Alle Sets</option>' + (S.idx ? S.idx.sets : []).map((x) => `<option>${esc(x)}</option>`).join('');
+  sel.value = S.setFilter;
 }
 function setInfo(t) { $('#dataInfo').textContent = t; }
 function renderEspInfo() {
@@ -920,30 +1278,31 @@ function runSearch() {
   const q = $('#q').value;
   const info = $('#searchInfo'), list = $('#results');
   if (!S.idx) { info.textContent = 'Kartendaten werden geladen …'; list.innerHTML = ''; return; }
-  const toks = norm(q).split(' ').filter(Boolean).map((t) => (/^\d+$/.test(t) ? String(parseInt(t, 10)) : t));
+  const toks = norm(q).split(' ').filter(Boolean);
   if (!toks.length) {
     info.textContent = q.trim() ? 'Bitte Buchstaben oder Zahlen eingeben.' : 'Tippe einen Kartennamen ein.';
     list.innerHTML = ''; S.res = [];
     return;
   }
-  const { cards, names, nums } = S.idx;
+  const { cards, names } = S.idx, flt = S.setFilter;
   const out = [];
   for (let i = 0; i < names.length && out.length < 40; i++) {
+    if (flt && cards[i].s !== flt) continue;
     const nm = names[i];
-    if (toks.every((t) => nm.includes(t) || (/^\d+$/.test(t) && String(nums[i]) === t))) out.push({ card: cards[i], score: 1 });
+    if (toks.every((t) => nm.includes(t))) out.push({ card: cards[i], score: 1 });
   }
   let fuzzy = false;
   if (out.length < 3) {
-    for (const r of matchName(q).ranked) if (!out.some((o) => o.card === r.card)) { out.push(r); fuzzy = true; }
+    for (const r of matchName(q).ranked) for (const card of r.cards) if (!out.some((o) => o.card === card)) { out.push({ card, score: r.score }); fuzzy = true; }
   }
   S.res = out.slice(0, 40);
-  info.textContent = S.res.length ? `${S.res.length} Treffer${fuzzy ? ' (inkl. unscharfer Treffer)' : ''}` : 'Keine Treffer.';
+  info.textContent = (S.res.length ? `${S.res.length} Treffer${fuzzy ? ' (inkl. unscharfer Treffer)' : ''}` : 'Keine Treffer.') + (flt ? ` · nur Set „${flt}“` : '');
   list.innerHTML = S.res.map((r, i) => {
     const img = safeUrl(r.card.img);
     const pi = priceInfo(r.card, S.ui.foil);
     return `<li><button class="row-btn" type="button" data-ridx="${i}">
       ${img ? `<img class="thumb" src="${esc(img)}" alt="" loading="lazy">` : '<div class="thumb" aria-hidden="true"></div>'}
-      <div><div class="name">${esc(r.card.n)}</div><div class="sub">${esc(r.card.s)} · #${esc(r.card.num)} · ${esc(r.card.r)}</div></div>
+      <div><div class="name">${esc(r.card.n)}</div><div class="sub">${esc(metaLine(setName(r.card.s, r.card.sc), numPart(numStr(r.card)), rarityName(r.card.r), statLine(r.card)))}</div></div>
       <div class="amt ${pi.value == null ? 'none' : ''}">${pi.value == null ? 'kein Preis' : esc(fmtMoney(pi.value, pi.cur))}</div>
     </button></li>`;
   }).join('');
@@ -954,7 +1313,7 @@ function renderDlgBody() {
   const foil = $('#dlgFoil').checked;
   const pi = priceInfo(card, foil);
   const extra = pi.single ? `<div class="src">Für dieses Produkt gibt es nur den Druck „${esc(pi.sub)}“; der Preis gilt dafür.</div>` : '';
-  $('#dlgBody').innerHTML = `<div class="sub">${esc(card.s)} · #${esc(card.num)} · ${esc(card.r)} · ${esc(card.t || '')}</div>
+  $('#dlgBody').innerHTML = `<div class="sub">${esc(metaLine(setName(card.s, card.sc), numPart(numStr(card)), rarityName(card.r), card.t, statLine(card)))}</div>
     ${priceBlockHtml(pi)}${extra}`;
 }
 function openDetail(card) {
@@ -985,11 +1344,24 @@ function renderSettings() {
   renderEspInfo();
 }
 function renderCal() {
-  $('#calNameS').value = S.cal.nameOff; $('#calNameV').textContent = S.cal.nameOff;
-  $('#calNumS').value = S.cal.numOff; $('#calNumV').textContent = S.cal.numOff;
+  $('#calImgS').value = S.cal.imgMax; $('#calImgV').textContent = S.cal.imgMax;
+  const o = S.cal.off[$('#calReg').value];
+  $('#calXS').value = o[0]; $('#calXV').textContent = o[0];
+  $('#calYS').value = o[1]; $('#calYV').textContent = o[1];
+  $('#learnInfo').textContent = `${Object.keys(S.learned).length} gelernte Zuordnungen`;
   $('#calDbg').checked = S.cal.debug;
 }
 function saveCal() { lsSet(LS_CAL, S.cal); }
+// Import gelernter Namen: { names: {de: k} } oder direkt {de: k}; wird zusammengeführt
+function importLearned(text) {
+  let n = 0;
+  try {
+    const j = JSON.parse(text), src = j && typeof j.names === 'object' ? j.names : j;
+    for (const [de, k] of Object.entries(src || {})) if (typeof k === 'string' && k) { learn(de, k); n++; }
+  } catch { return 'Import fehlgeschlagen: keine gültige JSON-Datei.'; }
+  renderCal(); renderScanInfo();
+  return `${n} Zuordnungen importiert.`;
+}
 function syncScanFoil() { $('#scanFoil').checked = !!S.ui.foil; }
 async function loadSettings() {
   try {
@@ -1045,14 +1417,16 @@ function bindUi() {
   $$('.tab').forEach((b) => b.addEventListener('click', () => showView(b.dataset.view)));
   $('#btnScan').addEventListener('click', () => (S.scanning ? stopScan() : startScan()));
   $('#scanFoil').addEventListener('change', (e) => { S.ui.foil = e.target.checked; lsSet(LS_UI, S.ui); });
+  $('#last').addEventListener('click', (e) => { const b = e.target.closest('[data-var]'); if (b) switchVariant(b.dataset.var); });
   $('#chips').addEventListener('click', async (e) => {
     const b = e.target.closest('[data-si]');
     if (!b) return;
     const r = S.sugg[Number(b.dataset.si)];
     hideSuggest();
     if (!r) return;
-    S.locked = r.card.p; S.others = 0; S.streak = 0; S.streakPid = null;
-    const rec = await captureCard(r.card, { ocr: null });
+    const ctx = S.suggCtx || {};
+    S.locked = r.card.k; S.others = 0; S.streak = 0; S.streakPid = null;
+    const rec = await captureCard(r.card, { nameDe: ctx.nameDe, number: ctx.number, matchInfo: { signals: [...r.sig, 'Auswahl'], score: Math.round(r.pts) } });
     if (!rec) S.locked = null;
   });
   document.addEventListener('click', async (e) => {
@@ -1064,6 +1438,12 @@ function bindUi() {
     else if (act === 'inc' && rec) setQty(id, rec.qty + 1);
     else if (act === 'dec' && rec) setQty(id, rec.qty - 1);
     else if (act === 'del') deleteScan(id);
+  });
+  $('#setFilter').addEventListener('change', (e) => {
+    S.setFilter = e.target.value; lsSet(LS_FLT, S.setFilter);
+    S.locked = null; S.streak = 0; S.streakPid = null; hideSuggest();
+    renderScanInfo();
+    if ($('#q').value) runSearch();
   });
   $('#q').addEventListener('input', () => { clearTimeout(S.searchTmr); S.searchTmr = setTimeout(runSearch, 120); });
   $('#results').addEventListener('click', (e) => {
@@ -1088,10 +1468,20 @@ function bindUi() {
   $('#setCountry').addEventListener('change', (e) => { $('#setCur').textContent = CUR_OF[e.target.value] || '–'; });
   $('#setForm').addEventListener('submit', saveSettings);
   $('#btnReloadData').addEventListener('click', () => loadData(true));
-  $('#calNameS').addEventListener('input', (e) => { S.cal.nameOff = Number(e.target.value); $('#calNameV').textContent = S.cal.nameOff; saveCal(); layoutGuide(); });
-  $('#calNumS').addEventListener('input', (e) => { S.cal.numOff = Number(e.target.value); $('#calNumV').textContent = S.cal.numOff; saveCal(); layoutGuide(); });
+  $('#calReg').addEventListener('change', renderCal);
+  ['X', 'Y'].forEach((a, i) => $(`#cal${a}S`).addEventListener('input', (e) => {
+    S.cal.off[$('#calReg').value][i] = Number(e.target.value); saveCal(); renderCal(); layoutGuide();
+  }));
+  $('#btnLearnExp').addEventListener('click', () => deliver(new Blob([JSON.stringify({ version: 1, names: S.learned }, null, 2)], { type: 'application/json' }), `wow-deutsche-namen-${today()}.json`));
+  $('#btnLearnImp').addEventListener('click', () => $('#learnFile').click());
+  $('#learnFile').addEventListener('change', async (e) => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (f) toast(importLearned(await f.text()));
+  });
   $('#calDbg').addEventListener('change', (e) => { S.cal.debug = e.target.checked; saveCal(); renderDbg(); });
-  $('#calReset').addEventListener('click', () => { S.cal.nameOff = 0; S.cal.numOff = 0; saveCal(); renderCal(); layoutGuide(); });
+  $('#calImgS').addEventListener('input', (e) => { S.cal.imgMax = Number(e.target.value); $('#calImgV').textContent = S.cal.imgMax; saveCal(); });
+  $('#calReset').addEventListener('click', () => { for (const r of CAL_REGS) S.cal.off[r] = [0, 0]; S.cal.imgMax = MATCH_MAX; saveCal(); renderCal(); layoutGuide(); });
   // Bilder ohne Erfolg unsichtbar machen, Platz im Raster bleibt erhalten (kein Inline-Handler)
   document.addEventListener('error', (e) => { if (e.target && e.target.tagName === 'IMG') e.target.style.visibility = 'hidden'; }, true);
   $('#video').addEventListener('resize', layoutGuide);
@@ -1102,7 +1492,19 @@ function bindUi() {
   if (navigator.share) $('#btnShare').hidden = false;
 }
 
+function buildRegionUi() {
+  const ref = $('#camMsg');
+  for (const r of REGS) {
+    const d = document.createElement('div');
+    d.id = 'box-' + r; d.className = 'cal-box'; d.hidden = true; d.setAttribute('aria-hidden', 'true');
+    d.innerHTML = `<span>${REG[r].l}</span>`;
+    ref.before(d);
+  }
+  $('#dbgReg').innerHTML = REGS.map((r) => `<figure class="${REG[r].w > 0.3 ? 'wide' : ''}"><canvas id="cv-${r}" width="10" height="10"></canvas><figcaption>${REG[r].l}: <span id="raw-${r}">–</span></figcaption></figure>`).join('');
+  $('#calReg').innerHTML = CAL_REGS.map((r) => `<option value="${r}">${REG[r].l}</option>`).join('');
+}
 async function boot() {
+  buildRegionUi();
   bindUi();
   renderCountrySelect();
   syncScanFoil();
@@ -1119,19 +1521,56 @@ async function boot() {
  * Testhilfe (nur für Tests/Diagnose): window.__wow
  * ============================================================ */
 const round3 = (v) => Math.round(v * 1000) / 1000;
+function loadImage(url) {
+  return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('Bild nicht ladbar: ' + url)); i.src = url; });
+}
 const bootP = boot();
 window.__wow = {
   ready: bootP,
-  testMatch(nameText, numText = '') {
-    const m = matchName(nameText, numText);
-    return {
-      top: m.ranked[0] ? { name: m.ranked[0].card.n, pid: m.ranked[0].card.p, score: round3(m.ranked[0].score) } : null,
-      ranked: m.ranked.map((r) => ({ name: r.card.n, pid: r.card.p, num: r.card.num, score: round3(r.score) })),
-      ms: round3(m.ms),
-    };
+  // Bild wie den Kartenrahmen eines Kamerabilds auswerten. opts: feed (Erfassungslogik), filter (Canvas-Filter), shift (px), scale
+  async testImage(url, opts = {}) {
+    const img = await loadImage(url);
+    const cv = document.createElement('canvas');
+    cv.width = CARD_W; cv.height = CARD_H;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    ctx.fillStyle = '#111'; ctx.fillRect(0, 0, CARD_W, CARD_H);
+    if (opts.filter) ctx.filter = opts.filter;
+    const sc = opts.scale || 1, sh = opts.shift || 0;
+    ctx.drawImage(img, sh + (CARD_W - CARD_W * sc) / 2, sh + (CARD_H - CARD_H * sc) / 2, CARD_W * sc, CARD_H * sc);
+    return processCard(cv, opts.feed !== false);
+  },
+  // artHash eines Bildes in Originalgröße (Abgleich Browser ↔ Python)
+  async hashImage(url) {
+    const img = await loadImage(url);
+    const cv = document.createElement('canvas');
+    cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0);
+    const r = self.WowArtHash.artHash(ctx.getImageData(0, 0, cv.width, cv.height).data, cv.width, cv.height, 4);
+    return { hash: r.hash, color: r.color };
+  },
+  artState: () => (S.art ? { groups: S.art.n, products: S.art.count, imgMax: S.cal.imgMax } : null),
+  testMatch(nameText) {
+    const m = matchName(nameText);
+    const out = (r) => ({ base: r.base, name: r.card.n, pid: r.card.p, score: round3(r.score), printings: r.cards.map((c) => c.p) });
+    return { top: m.ranked[0] ? out(m.ranked[0]) : null, ranked: m.ranked.map(out), ms: round3(m.ms) };
   },
   // Führt einen OCR-Frame-Auswertungsschritt aus (ohne Kamera), für Tests der Stabilitätsregel.
-  frame(nameText, numText = '', conf = 80) { return onFrame(matchName(nameText, numText), nameText, numText, conf); },
+  // Ein Frame mit vorgegebenen OCR-Rohtexten je Bereich (name, strip, cost, atk, hp), optional mit Kartenbild (image)
+  async frame(inj = {}, opts = {}) {
+    let cv = null;
+    if (inj.image) {
+      const img = await loadImage(inj.image);
+      cv = document.createElement('canvas'); cv.width = CARD_W; cv.height = CARD_H;
+      cv.getContext('2d').drawImage(img, 0, 0, CARD_W, CARD_H);
+    }
+    return processCard(cv, opts.feed !== false, inj);
+  },
+  learned: () => ({ ...S.learned }),
+  importLearned,
+  regions: () => Object.fromEntries(REGS.map((r) => [r, regBox(r)])),
+  setFilter(v) { const sel = $('#setFilter'); sel.value = v; sel.dispatchEvent(new Event('change')); },
+  card: (k) => (S.idx ? S.idx.byK.get(k) || null : null),
   priceInfo(pid, foil, pt, cur) {
     const card = S.idx && S.idx.cards.find((c) => c.p === pid);
     return card ? priceInfo(card, foil, pt, cur) : null;
@@ -1148,6 +1587,7 @@ window.__wow = {
     return apiMaxInFlight;
   },
   subKey(pid, foil) { const c = S.idx && S.idx.cards.find((x) => x.p === pid); const i = c ? priceInfo(c, foil) : null; return i ? { sub: i.sub, isFoil: i.isFoil, value: i.value } : null; },
+  rarityName,
   csv: () => makeCsv(S.scans),
   json: () => makeJson(S.scans),
   report: () => makeReport(),

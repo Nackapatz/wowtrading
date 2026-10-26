@@ -22,7 +22,7 @@ jobs:
       - name: Abhängigkeiten installieren
         run: |
           python -m pip install --upgrade pip
-          pip install pytest requests -r flasher/requirements.txt
+          pip install pytest -r data-pipeline/requirements.txt -r flasher/requirements.txt
       - name: pytest
         run: pytest data-pipeline flasher
 
@@ -75,8 +75,15 @@ jobs:
           --add-data "flasher/firmware.bin;."
           --paths flasher
           --collect-submodules esptool
+          --collect-data esptool
           --collect-submodules serial
           flasher/flasher.py
+      - name: EXE-Selbsttest (esptool-Stub und firmware.bin im Bundle)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath dist/WoWScannerFlasher.exe -ArgumentList '--selftest' -Wait -PassThru
+          # Exit-Code: 0 = ok, Bit 1 = ESP8266-Stub fehlt, Bit 2 = firmware.bin fehlt
+          if ($p.ExitCode -ne 0) { throw "Selbsttest der EXE fehlgeschlagen (Exit-Code $($p.ExitCode))" }
       - name: Artefakte sammeln
         shell: pwsh
         run: |

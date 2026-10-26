@@ -14,9 +14,18 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+# Kartendatenbank (docs/CARD_ID.md): feste Commits, zur Laufzeit geladen, nie eingecheckt.
+env:
+  CARDDB_REPO: https://github.com/ouchmyothereye/wow_tcg_scanner.git
+  CARDDB_SHA: af55311a0c46149645cf6310217ceea90c18dfe2
+  SK_REPO: https://github.com/mikechambers/SpectralKitten.git
+  SK_SHA: 76c7ec697a73a1a9462499e463e7575d79a99140
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Erster Lauf lädt bis zu 6000 Kartenbilder (100 ms Pause); danach inkrementell.
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,8 +38,25 @@ jobs:
       - name: Install dependencies
         run: pip install -r data-pipeline/requirements.txt
 
+      # Fehlt eine Quelle, baut build_data.py cards.json Version 1 (nur TCGplayer) mit Warnung.
+      - name: Fetch card sources (pinned commits)
+        continue-on-error: true
+        run: |
+          fetch() {  # dir repo sha file
+            rm -rf "$1" && git init -q "$1" && git -C "$1" remote add origin "$2" \
+              && git -C "$1" fetch -q --depth 1 --filter=blob:none origin "$3" \
+              && git -C "$1" checkout -q FETCH_HEAD -- "$4" \
+              || echo "::warning::Kartenquelle $2@$3 nicht geladen"
+          }
+          fetch "$RUNNER_TEMP/carddb" "$CARDDB_REPO" "$CARDDB_SHA" wow_cards.db
+          fetch "$RUNNER_TEMP/sk" "$SK_REPO" "$SK_SHA" src/www/api/all_cards.json
+
       - name: Build data
-        run: python data-pipeline/build_data.py --out site/data
+        run: >
+          python data-pipeline/build_data.py --out site/data
+          --carddb "$RUNNER_TEMP/carddb/wow_cards.db"
+          --skjson "$RUNNER_TEMP/sk/src/www/api/all_cards.json"
+          --carddb-commit "$CARDDB_SHA" --skjson-commit "$SK_SHA"
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

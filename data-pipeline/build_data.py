@@ -4,6 +4,9 @@
 Sources:
   * tcgcsv.com  - TCGplayer mirror, category 13 (WoW), prices in USD
   * ECB         - daily euro reference rates (eurofxref-daily.xml)
+  * optional: wow_cards.db + SpectralKitten all_cards.json (carddb.py) for
+    cards.json version 2 (set + collector number + stats, docs/CARD_ID.md).
+    Without them cards.json falls back to version 1 (TCGplayer products only).
 
 Output (default --out site/data, index page in the parent folder):
   cards.json, prices.json, rates.json, meta.json, index.html
@@ -31,6 +34,9 @@ from typing import Any, Callable, Iterable, Mapping, Optional
 
 import requests
 
+import arthash
+import carddb
+
 log = logging.getLogger("build_data")
 
 TCG_BASE = "https://tcgcsv.com"
@@ -38,6 +44,7 @@ TCG_CATEGORY = 13
 LAST_UPDATED_URL = f"{TCG_BASE}/last-updated.txt"
 GROUPS_URL = f"{TCG_BASE}/tcgplayer/{TCG_CATEGORY}/groups"
 ECB_URL = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
+DEFAULT_PAGES_DATA = "https://nackapatz.github.io/wowtrading/data/"
 
 REQUEST_DELAY_S = 0.15
 REQUEST_TIMEOUT_S = 30
@@ -62,6 +69,19 @@ class CollectionAborted(PipelineError):
 # ---------------------------------------------------------------------------
 # 1. Fetch layer
 # ---------------------------------------------------------------------------
+
+def previous_hashes_url() -> str:
+    """URL der bisherigen hashes.json auf GitHub Pages (für inkrementelle Bild-Hashes)."""
+    base = os.environ.get("PAGES_DATA_URL", "").strip()
+    if not base:
+        repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
+        if "/" in repo:
+            owner, name = repo.split("/", 1)
+            base = f"https://{owner.lower()}.github.io/{name}/data/"
+        else:
+            base = DEFAULT_PAGES_DATA
+    return base.rstrip("/") + "/hashes.json"
+
 
 def user_agent_string() -> str:
     repo = os.environ.get("GITHUB_REPOSITORY", "").strip() or "unknown"
@@ -316,10 +336,50 @@ def collect_catalog(client: Any) -> Catalog:
     return Catalog(price_date, cards, prices, ok, len(groups), failed)
 
 
+def load_card_sources(
+    db_path: Optional[str],
+    sk_path: Optional[str],
+    db_commit: str = carddb.CARDDB_COMMIT,
+    sk_commit: str = carddb.SK_COMMIT,
+) -> Optional[carddb.CardDb]:
+    """Kartendatenbank laden; fehlt eine Quelle oder ist sie kaputt -> None (cards.json v1)."""
+    missing = [name for name, path in (("--carddb", db_path), ("--skjson", sk_path))
+               if not path or not Path(path).is_file()]
+    if missing:
+        log.warning("Kartendatenbank fehlt (%s): cards.json wird Version 1 (nur TCGplayer)",
+                    ", ".join(missing))
+        return None
+    try:
+        db = carddb.load_card_db(db_path, sk_path, db_commit, sk_commit)
+    except Exception as exc:
+        log.warning("Kartendatenbank unbrauchbar (%s): cards.json wird Version 1", exc)
+        return None
+    rep = db.report
+    log.info("Kartendatenbank: %d DB-Karten, %d mit Werten, %d SK-Serien zugeordnet, nicht zugeordnet: %s",
+             rep.db_cards, rep.db_with_stats, len(rep.series), ", ".join(rep.unmatched_series) or "-")
+    return db
+
+
+def cards_document(
+    catalog: Catalog, generated_at: str, card_db: Optional[carddb.CardDb]
+) -> tuple[dict[str, Any], Optional[dict[str, int]]]:
+    """cards.json v2 mit Kartendatenbank, sonst v1. Fehler in v2 fallen auf v1 zurück."""
+    if card_db is not None:
+        try:
+            sets, cards, link = carddb.build_cards_v2(card_db, catalog.cards)
+            return {"generatedAt": generated_at, "version": 2, "sets": sets, "cards": cards}, link
+        except Exception as exc:
+            log.warning("cards.json v2 fehlgeschlagen (%s), Version 1 wird geschrieben", exc)
+    return {"generatedAt": generated_at, "version": 1, "cards": catalog.cards}, None
+
+
 def make_documents(
-    catalog: Catalog, rates_doc: Mapping[str, Any], generated_at: str
+    catalog: Catalog,
+    rates_doc: Mapping[str, Any],
+    generated_at: str,
+    card_db: Optional[carddb.CardDb] = None,
 ) -> dict[str, Any]:
-    cards_doc = {"generatedAt": generated_at, "cards": catalog.cards}
+    cards_doc, link = cards_document(catalog, generated_at, card_db)
     prices_doc = {
         "generatedAt": generated_at,
         "priceDate": catalog.price_date,
@@ -328,7 +388,9 @@ def make_documents(
     meta_doc = {
         "generatedAt": generated_at,
         "priceDate": catalog.price_date,
-        "cardCount": len(catalog.cards),
+        "cardCount": len(cards_doc["cards"]),
+        "cardsVersion": cards_doc["version"],
+        "productCount": len(catalog.cards),
         "groupCount": catalog.ok_groups,
         "failedGroups": catalog.failed_groups,
         "sources": [
@@ -336,6 +398,9 @@ def make_documents(
             {"name": "EZB-Referenzkurse", "url": ECB_URL},
         ],
     }
+    if link is not None:
+        meta_doc["link"] = link
+        meta_doc["sources"].extend(card_db.sources())
     return {
         "cards.json": cards_doc,
         "prices.json": prices_doc,
@@ -344,8 +409,15 @@ def make_documents(
     }
 
 
-def render_index(generated_at: str, price_date: str, card_count: int) -> str:
+def render_index(generated_at: str, price_date: str, card_count: int, card_sources: bool = False) -> str:
     esc = html.escape
+    card_source_item = (
+        '<li>Set, Sammlernummer und Kartenwerte: abgeleitet aus '
+        '<a href="https://github.com/ouchmyothereye/wow_tcg_scanner">wow_tcg_scanner</a> (wow_cards.db) und '
+        '<a href="https://github.com/mikechambers/SpectralKitten">SpectralKitten</a> '
+        '(nur Name, Set, Nummer und Werte, keine Rohdateien oder Bilder).</li>\n'
+        if card_sources else ""
+    )
     return f"""<!doctype html>
 <html lang="de">
 <head>
@@ -369,13 +441,14 @@ Die Dateien werden von einer GitHub Action gebaut.</p>
 <p>Dateien: <a href="data/cards.json">cards.json</a>,
 <a href="data/prices.json">prices.json</a>,
 <a href="data/rates.json">rates.json</a>,
-<a href="data/meta.json">meta.json</a></p>
+<a href="data/meta.json">meta.json</a>,
+<a href="data/hashes.json">hashes.json</a> (Bild-Fingerabdrücke)</p>
 <h2>Quellen</h2>
 <ul>
 <li>Preise: TCGplayer-Marktdaten über <a href="https://tcgcsv.com/">tcgcsv.com</a>
 (Kategorie WoW, Preise in US-Dollar, einmal täglich aktualisiert).</li>
 <li>Wechselkurse: <a href="https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml">EZB-Referenzkurse</a>.</li>
-</ul>
+{card_source_item}</ul>
 <p>Hinweis: inoffizielles Projekt, nicht mit Blizzard Entertainment, TCGplayer
 oder der EZB verbunden. Preise sind Richtwerte ohne Gewähr.</p>
 </body>
@@ -403,6 +476,8 @@ def run(
     out_dir: Path,
     site_dir: Path,
     now: Optional[datetime] = None,
+    images: Optional[Callable[[list, str], Mapping[str, Any]]] = None,
+    card_db: Optional[carddb.CardDb] = None,
 ) -> dict[str, Any]:
     generated_at = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -410,29 +485,67 @@ def run(
     rates_doc = rates_per_usd(ecb_date, eur_rates)
 
     catalog = collect_catalog(client)
-    docs = make_documents(catalog, rates_doc, generated_at)
+    docs = make_documents(catalog, rates_doc, generated_at, card_db)
+    card_count = len(docs["cards.json"]["cards"])
 
     out_dir = Path(out_dir)
     for name, doc in docs.items():
         write_json(out_dir / name, doc)
     _write_atomic(
         Path(site_dir) / "index.html",
-        render_index(generated_at, catalog.price_date, len(catalog.cards)),
+        render_index(generated_at, catalog.price_date, card_count,
+                     card_sources=docs["cards.json"]["version"] == 2),
     )
+    hash_count = None
+    if images is not None:
+        # Bild-Hashes sind optional: ein Fehler darf den Datenlauf nicht stoppen.
+        try:
+            hashes_doc = images(catalog.cards, generated_at)
+            write_json(out_dir / "hashes.json", hashes_doc)
+            hash_count = len(hashes_doc.get("hashes", {}))
+        except Exception as exc:
+            log.warning("Bild-Hashes übersprungen: %s", exc)
     log.info(
-        "Fertig: %d Karten, %d/%d Gruppen, %d Preise, USD-Kurse vom %s",
-        len(catalog.cards),
+        "Fertig: %d Karten (cards.json v%d), %d/%d Gruppen, %d Preise, USD-Kurse vom %s",
+        card_count,
+        docs["cards.json"]["version"],
         catalog.ok_groups,
         catalog.total_groups,
         len(catalog.prices),
         ecb_date,
     )
     return {
-        "cards": len(catalog.cards),
+        "cards": card_count,
+        "cards_version": docs["cards.json"]["version"],
+        "link": docs["meta.json"].get("link"),
         "groups_ok": catalog.ok_groups,
         "groups_total": catalog.total_groups,
         "prices": len(catalog.prices),
+        "hashes": hash_count,
     }
+
+
+def make_image_hasher(user_agent: str, max_new: int) -> Callable[[list, str], dict]:
+    """Bild-Hashes inkrementell: vorige hashes.json wiederverwenden, nur fehlende Produkte laden.
+    Scheitert die Berechnung als Ganzes, wird die vorige Datei (falls vorhanden) weitergegeben."""
+    def images(cards: list, generated_at: str) -> dict:
+        session = requests.Session()
+        previous = arthash.load_previous(session, previous_hashes_url(), user_agent)
+        try:
+            doc, stats = arthash.build_hashes_doc(
+                cards, previous, arthash.ImageGetter(session, user_agent), generated_at, max_new=max_new
+            )
+        except Exception as exc:
+            reused = arthash.previous_hashes(previous)
+            if not reused:
+                raise
+            log.warning("Bild-Hashes fehlgeschlagen (%s), vorige Datei wird übernommen", exc)
+            return {"generatedAt": previous.get("generatedAt"), "algo": arthash.ALGO,
+                    "region": list(arthash.REGION), "hashes": reused}
+        log.info("Bild-Hashes: %(total)d gesamt, %(reused)d übernommen, %(fetched)d geladen, "
+                 "%(failed)d ohne Bild, %(skipped)d auf nächsten Lauf verschoben", stats)
+        return doc
+    return images
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -443,6 +556,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         default=None,
         help="Ordner für index.html (Standard: Elternordner von --out)",
     )
+    parser.add_argument("--no-images", action="store_true", help="keine Bild-Hashes (hashes.json) berechnen")
+    parser.add_argument("--max-images", type=int, default=arthash.MAX_NEW_IMAGES,
+                        help="max. neu abgerufene Bilder pro Lauf")
+    parser.add_argument("--carddb", default=None, help="Pfad zu wow_cards.db (für cards.json v2)")
+    parser.add_argument("--skjson", default=None, help="Pfad zu SpectralKitten all_cards.json (für cards.json v2)")
+    parser.add_argument("--carddb-commit", default=carddb.CARDDB_COMMIT, help="Commit von wow_tcg_scanner (für meta.json)")
+    parser.add_argument("--skjson-commit", default=carddb.SK_COMMIT, help="Commit von SpectralKitten (für meta.json)")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -450,8 +570,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     site_dir = Path(args.site_dir) if args.site_dir else out_dir.parent
 
     client = TcgClient(user_agent=user_agent_string())
+    images = None if args.no_images else make_image_hasher(user_agent_string(), args.max_images)
+    card_db = load_card_sources(args.carddb, args.skjson, args.carddb_commit, args.skjson_commit)
     try:
-        run(client, out_dir=out_dir, site_dir=site_dir)
+        run(client, out_dir=out_dir, site_dir=site_dir, images=images, card_db=card_db)
     except (PipelineError, requests.RequestException) as exc:
         log.error("Datenlauf abgebrochen: %s", exc)
         return 1

@@ -83,9 +83,11 @@ bool isCode(const String& text, unsigned int length) {
 CardView makeCardView(JsonDocument& scan) {
     CardView view;
     view.name = textOf(scan["name"]);
+    // TCGplayer has no set code for many WoW sets; fall back to the set name.
     view.setLine = textOf(scan["setCode"]);
+    if (view.setLine.isEmpty()) view.setLine = textOf(scan["set"]);
     const String number = textOf(scan["number"]);
-    if (!number.isEmpty()) view.setLine += " #" + number;
+    if (!number.isEmpty()) view.setLine += view.setLine.isEmpty() ? "#" + number : " #" + number;
     view.rarity = textOf(scan["rarity"]);
 
     const JsonVariantConst price = scan["price"];
@@ -98,11 +100,35 @@ CardView makeCardView(JsonDocument& scan) {
     return view;
 }
 
-// Serves one gzip-compressed asset from flash.
+// Serves one gzip-compressed asset from flash. send_P gives up after 1 s
+// without progress; with little free heap TCP stalls longer than that and
+// larger files (app.js) arrived cut off. So the body is written here in
+// pieces, and only a stall of kAssetStallMs ends the transfer.
+constexpr size_t kAssetChunk = 1024;
+constexpr uint32_t kAssetStallMs = 10000;
+
 void sendAsset(const WebAsset& asset) {
     https.sendHeader("Content-Encoding", "gzip");
     https.sendHeader("Cache-Control", "no-cache");
-    https.send_P(200, asset.mime, reinterpret_cast<PGM_P>(asset.data), asset.length);
+    https.setContentLength(asset.length);
+    https.send(200, asset.mime, "");
+
+    auto& client = https.client();
+    const uint8_t* data = asset.data;
+    size_t remaining = asset.length;
+    uint32_t lastProgress = millis();
+    while (remaining > 0 && client.connected()) {
+        const size_t chunk = remaining < kAssetChunk ? remaining : kAssetChunk;
+        const size_t written = client.write_P(reinterpret_cast<PGM_P>(data), chunk);
+        if (written > 0) {
+            data += written;
+            remaining -= written;
+            lastProgress = millis();
+        } else if (millis() - lastProgress > kAssetStallMs) {
+            break;
+        }
+        yield();
+    }
 }
 
 void handleStatus() {

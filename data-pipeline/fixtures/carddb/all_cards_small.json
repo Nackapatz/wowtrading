@@ -1,0 +1,749 @@
+{
+ "cards": [
+  {
+   "card_num": 1,
+   "name": "Boris BrightBeard",
+   "cost": 0,
+   "attack": 0,
+   "health": 26,
+   "defense": 0,
+   "series": {
+    "name": "Heroes of Azeroth"
+   },
+   "type": {
+    "name": "Hero"
+   },
+   "race": {
+    "name": "Dwarf"
+   },
+   "faction": {
+    "name": "Alliance"
+   },
+   "class_restrictions": [],
+   "card_class": {
+    "name": "Priest"
+   },
+   "rarity": {
+    "abbreviation": "U"
+   }
+  },
+  {
+   "card_num": 2,
+   "name": "Dizdemona",
+   "cost": 0,
+   "attack": 0,
+   "health": 28,
+   "defense": 0,
+   "series": {
+    "name": "Heroes of Azeroth"
+   },
+   "type": {
+    "name": "Hero"
+   },
+   "race": {
+    "name": "Gnome"
+   },
+   "faction": {
+    "name": "Alliance"
+   },
+   "class_restrictions": [],
+   "card_class": {
+    "name": "Warlock"
+   },
+   "rarity": {
+    "abbreviation": "U"
+   }
+  },
+  {
+   "card_num": 3,
+   "name": "Elendril",
+   "cost": 0,
+   "attack": 0,
+   "health": 28,
+   "defense": 0,
+   "series": {
+    "name": "Heroes of Azeroth"
+   },
+   "type": {
+    "name": "Hero"
+   },
+   "race": {
+    "name": "Night Elf"
+   },
+   "faction": {
+    "name": "Alliance"
+   },
+   "class_restrictions": [],
+   "card_class": {
+    "name": "Hunter"
+   },
+   "rarity": {
+    "abbreviation": "U"
+   }
+  },
+  {
+   "card_num": 4,
+   "name": "Graccus",
+   "cost": 0,
+   "attack": 0,
+   "health": 29,
+   "defense": 0,
+   "series": {
+    "name": "Heroes of Azeroth"
+   },
+   "type": {
+    "name": "Hero"
+   },
+   "race": {
+    "name": "Human"
+   },
+   "faction": {
+    "name": "Alliance"
+   },
+   "class_restrictions": [],
+   "card_class": {
+    "name": "Paladin"
+   },
+   "rarity": {
+    "abbreviation": "U"
+   }
+  },
+  {
+   "card_num": 5,
+   "name": "Litori Frostburn",
+   "cost": 0,
+   "attack": 0,
+   "health": 25,
+   "defense": 0,
+   "series": {
+    "name": "Heroes of Azeroth"
+   },
+   "type": {
+    "name": "Hero"
+   },
+   "race": {
+    "name": "Human"
+   },
+   "faction": {
+    "name": "Alliance"
+   },
+   "class_restrictions": [],
+   "card_class": {
+    "name": "Mage"
+   },
+   "rarity": {
+    "abbreviation": "U"
+   }
+  },
+  {
+   "card_num": 6,
+   "name": "Moonshadow",
+   "cost": 0,
+   "attack": 0,
+   "health": 27,
+   "defense": 0,
+   "series": {
+    "name": "Heroes of Azeroth"
+   },
+   "type": {
+    "name": "Hero"
+   },
+   "race": {
+    "name": "Night Elf"
+   },
+   "faction": {
+    "name": "Alliance"
+   },
+   "class_restrictions": [],
+   "card_class": {
+    "name": "Druid"
+   },
+   "rarity": {
+    "abbreviation": "U"
+   }
+  },
+  {
+   "card_num": 361,
+   "name": "Zapped Giants",
+   "cost": 0,
+   "attack": 0,
+   "health": 0,
+   "defense": 0,
+   "series": {
+    "name": "Heroes of Azeroth"
+   },
+   "type": {
+    "name": "Quest"
+   },
+   "race": null,
+   "faction": null,
+   "class_restrictions": [
+    {
+     "name": "Death Knight"
+    },
+    {
+     "name": "Demon"
+    },
+    {
+     "name": "Druid"
+    },
+    {
+     "name": "Hunter"
+    },
+    {
+     "name": "Mage"
+    },
+    {
+     "name": "Paladin"
+    },
+    {
+     "name": "Priest"
+    },
+    {
+     "name": "Rogue"
+    },
+    {
+     "name": "Shaman"
+    },
+    {
+     "name": "Warlock"
+    },
+    {
+     "name": "Warrior"
+    }
+   ],
+   "card_class": null,
+   "rarity": {
+    "abbreviation": "C"
+   }
+  },
+  {
+   "card_num": 1,
+   "name": "\"Black Ice\" Fizzlefreeze",
+   "cost": 0,
+   "attack": 0,
+   "health": 25,
+   "defense": 0,
+   "series": {
+    "name": "Hunt for Illidan"
+   },
+   "type": {
+    "name": "Hero"
+   },
+   "race": {
+    "name": "Gnome"
+   },
+   "faction": {
+    "name": "Alliance"
+   },
+   "class_restrictions": [
+    {
+     "name": "Mage"
+    }
+   ],
+   "card_class": null,
+   "rarity": {
+    "abbreviation": "U"
+   }
+  },
+  {
+   "card_num": 2,
+   "name": "Blaine Roberts",
+   "cost": 0,
+   "attack": 0,
+   "health": 30,
+   "defense": 0,
+   "series": {
+    "name": "Hunt for Illidan"
+   },
+   "type": {
+    "name": "Hero"
+   },
+   "race": {
+    "name": "Human"
+   },
+   "faction": {
+    "name": "Alliance"
+   },
+   "class_restrictions": [
+    {
+     "name": "Warrior"
+    }
+   ],
+   "card_class": null,
+   "rarity": {
+    "abbreviation": "U"
+   }
+  },
+  {
+   "card_num": 252,
+   "name": "What Illidan Wants, Illidan Gets...",
+   "cost": 0,
+   "attack": 0,
+   "health": 0,
+   "defense": 0,
+   "series": {
+    "name": "Hunt for Illidan"
+   },
+   "type": {
+    "name": "Quest"
+   },
+   "race": null,
+   "faction": null,
+   "class_restrictions": [
+    {
+     "name": "Death Knight"
+    },
+    {
+     "name": "Demon"
+    },
+    {
+     "name": "Druid"
+    },
+    {
+     "name": "Hunter"
+    },
+    {
+     "name": "Mage"
+    },
+    {
+     "name": "Paladin"
+    },
+    {
+     "name": "Priest"
+    },
+    {
+     "name": "Rogue"
+    },
+    {
+     "name": "Shaman"
+    },
+    {
+     "name": "Warlock"
+    },
+    {
+     "name": "Warrior"
+    }
+   ],
+   "card_class": null,
+   "rarity": {
+    "abbreviation": "U"
+   }
+  },
+  {
+   "card_num": 1,
+   "name": "Black Felsteel Bracers",
+   "cost": 2,
+   "attack": 0,
+   "health": 0,
+   "defense": 0,
+   "series": {
+    "name": "Player Crafted Item"
+   },
+   "type": {
+    "name": "Armor"
+   },
+   "race": null,
+   "faction": null,
+   "class_restrictions": [
+    {
+     "name": "Paladin"
+    },
+    {
+     "name": "Warrior"
+    }
+   ],
+   "card_class": null,
+   "rarity": {
+    "abbreviation": "E"
+   }
+  },
+  {
+   "card_num": 1,
+   "name": "Boots of Utter Darkness",
+   "cost": 2,
+   "attack": 0,
+   "health": 0,
+   "defense": 1,
+   "series": {
+    "name": "Player Crafted Item"
+   },
+   "type": {
+    "name": "Armor"
+   },
+   "race": null,
+   "faction": null,
+   "class_restrictions": [
+    {
+     "name": "Druid"
+    },
+    {
+     "name": "Rogue"
+    }
+   ],
+   "card_class": null,
+   "rarity": {
+    "abbreviation": "E"
+   }
+  },
+  {
+   "card_num": 1,
+   "name": "Commander Michael Goodchilde",
+   "cost": 0,
+   "attack": 0,
+   "health": 29,
+   "defense": 0,
+   "series": {
+    "name": "Servant of the Betrayer"
+   },
+   "type": {
+    "name": "Hero"
+   },
+   "race": {
+    "name": "Human"
+   },
+   "faction": {
+    "name": "Alliance"
+   },
+   "class_restrictions": [
+    {
+     "name": "Paladin"
+    }
+   ],
+   "card_class": null,
+   "rarity": {
+    "abbreviation": "U"
+   }
+  },
+  {
+   "card_num": 2,
+   "name": "Fallingstar",
+   "cost": 0,
+   "attack": 0,
+   "health": 30,
+   "defense": 0,
+   "series": {
+    "name": "Servant of the Betrayer"
+   },
+   "type": {
+    "name": "Hero"
+   },
+   "race": {
+    "name": "Night Elf"
+   },
+   "faction": {
+    "name": "Alliance"
+   },
+   "class_restrictions": [
+    {
+     "name": "Warrior"
+    }
+   ],
+   "card_class": null,
+   "rarity": {
+    "abbreviation": "U"
+   }
+  },
+  {
+   "card_num": 153,
+   "name": "Roke the Ice Baron",
+   "cost": 2,
+   "attack": 2,
+   "health": 1,
+   "defense": 0,
+   "series": {
+    "name": "Servant of the Betrayer"
+   },
+   "type": {
+    "name": "Ally"
+   },
+   "race": {
+    "name": "Gnome"
+   },
+   "faction": {
+    "name": "Alliance"
+   },
+   "class_restrictions": [
+    {
+     "name": "Mage"
+    }
+   ],
+   "card_class": null,
+   "rarity": {
+    "abbreviation": "R"
+   }
+  },
+  {
+   "card_num": 163,
+   "name": "Hulok Trailblazer",
+   "cost": 2,
+   "attack": 2,
+   "health": 2,
+   "defense": 0,
+   "series": {
+    "name": "Servant of the Betrayer"
+   },
+   "type": {
+    "name": "Ally"
+   },
+   "race": {
+    "name": "Tauren"
+   },
+   "faction": {
+    "name": "Horde"
+   },
+   "class_restrictions": [
+    {
+     "name": "Druid"
+    }
+   ],
+   "card_class": null,
+   "rarity": {
+    "abbreviation": "C"
+   }
+  },
+  {
+   "card_num": 264,
+   "name": "You, Robot",
+   "cost": 0,
+   "attack": 0,
+   "health": 0,
+   "defense": 0,
+   "series": {
+    "name": "Servant of the Betrayer"
+   },
+   "type": {
+    "name": "Quest"
+   },
+   "race": null,
+   "faction": null,
+   "class_restrictions": [
+    {
+     "name": "Death Knight"
+    },
+    {
+     "name": "Demon"
+    },
+    {
+     "name": "Druid"
+    },
+    {
+     "name": "Hunter"
+    },
+    {
+     "name": "Mage"
+    },
+    {
+     "name": "Paladin"
+    },
+    {
+     "name": "Priest"
+    },
+    {
+     "name": "Rogue"
+    },
+    {
+     "name": "Shaman"
+    },
+    {
+     "name": "Warlock"
+    },
+    {
+     "name": "Warrior"
+    }
+   ],
+   "card_class": null,
+   "rarity": {
+    "abbreviation": "U"
+   }
+  },
+  {
+   "card_num": 1,
+   "name": "Anchorite Kalinna",
+   "cost": 0,
+   "attack": 0,
+   "health": 26,
+   "defense": 0,
+   "series": {
+    "name": "The Dark Portal"
+   },
+   "type": {
+    "name": "Hero"
+   },
+   "race": {
+    "name": "Draenei"
+   },
+   "faction": {
+    "name": "Alliance"
+   },
+   "class_restrictions": [
+    {
+     "name": "Priest"
+    }
+   ],
+   "card_class": null,
+   "rarity": {
+    "abbreviation": "U"
+   }
+  },
+  {
+   "card_num": 2,
+   "name": "Grumpherys",
+   "cost": 0,
+   "attack": 0,
+   "health": 28,
+   "defense": 0,
+   "series": {
+    "name": "The Dark Portal"
+   },
+   "type": {
+    "name": "Hero"
+   },
+   "race": {
+    "name": "Dwarf"
+   },
+   "faction": {
+    "name": "Alliance"
+   },
+   "class_restrictions": [
+    {
+     "name": "Hunter"
+    }
+   ],
+   "card_class": null,
+   "rarity": {
+    "abbreviation": "U"
+   }
+  },
+  {
+   "card_num": 319,
+   "name": "The Scourge Cauldrons",
+   "cost": 0,
+   "attack": 0,
+   "health": 0,
+   "defense": 0,
+   "series": {
+    "name": "The Dark Portal"
+   },
+   "type": {
+    "name": "Quest"
+   },
+   "race": null,
+   "faction": null,
+   "class_restrictions": [
+    {
+     "name": "Death Knight"
+    },
+    {
+     "name": "Demon"
+    },
+    {
+     "name": "Druid"
+    },
+    {
+     "name": "Hunter"
+    },
+    {
+     "name": "Mage"
+    },
+    {
+     "name": "Paladin"
+    },
+    {
+     "name": "Priest"
+    },
+    {
+     "name": "Rogue"
+    },
+    {
+     "name": "Shaman"
+    },
+    {
+     "name": "Warlock"
+    },
+    {
+     "name": "Warrior"
+    }
+   ],
+   "card_class": null,
+   "rarity": {
+    "abbreviation": "C"
+   }
+  },
+  {
+   "card_num": 147,
+   "name": "Timriv the Enforcer",
+   "cost": 4,
+   "attack": 3,
+   "health": 3,
+   "defense": null,
+   "series": {
+    "name": "War of the Elements"
+   },
+   "type": {
+    "name": "Ally"
+   },
+   "race": {
+    "name": "Orc"
+   },
+   "faction": {
+    "name": "Horde"
+   },
+   "class_restrictions": [],
+   "card_class": {
+    "name": "Rogue"
+   },
+   "rarity": {
+    "abbreviation": "C"
+   }
+  },
+  {
+   "card_num": 148,
+   "name": "Tharuk Foulblade",
+   "cost": 4,
+   "attack": 3,
+   "health": 3,
+   "defense": null,
+   "series": {
+    "name": "War of the Elements"
+   },
+   "type": {
+    "name": "Ally"
+   },
+   "race": {
+    "name": "Goblin"
+   },
+   "faction": {
+    "name": "Horde"
+   },
+   "class_restrictions": [],
+   "card_class": {
+    "name": "Warrior"
+   },
+   "rarity": {
+    "abbreviation": "U"
+   }
+  },
+  {
+   "card_num": 220,
+   "name": "Skywall",
+   "cost": null,
+   "attack": null,
+   "health": null,
+   "defense": null,
+   "series": {
+    "name": "War of the Elements"
+   },
+   "type": {
+    "name": "Location"
+   },
+   "race": null,
+   "faction": null,
+   "class_restrictions": [],
+   "card_class": null,
+   "rarity": {
+    "abbreviation": "R"
+   }
+  }
+ ]
+}
