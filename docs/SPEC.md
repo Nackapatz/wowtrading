@@ -98,7 +98,7 @@ README.md (Deutsch)
 - Sammlungsansicht: Liste aller Scans (vom ESP), Menge ändern, löschen, Summen: Anzahl Karten, Gesamtwert, Wert pro Set, pro Seltenheit, Top-10 teuerste.
 - Export: CSV (Semikolon, UTF-8 mit BOM, Dezimalkomma bei EUR für Excel DE), JSON, und Kurzbericht als Text (Zusammenfassung zum Teilen). Download per Blob; zusätzlich Web Share API, wenn verfügbar.
 - Fehlerfälle: keine Kamera/kein HTTPS → klare Meldung mit Anleitung (Zertifikat akzeptieren); keine Internetverbindung fürs Laden der Daten → Meldung, gecachte Daten nutzen.
-- Größe: alle drei Dateien zusammen gzip < 40 KB.
+- Größe: alle Web-App-Dateien zusammen gzip < 56 KB (Flash hat Platz; erhöht für die Kartenrand-Erkennung).
 
 ## 3. Daten-Pipeline (data-pipeline/build_data.py)
 
