@@ -41,9 +41,11 @@
 
     <button id="btnScan" class="btn primary big" type="button" aria-pressed="false">Scan starten</button>
     <label class="switch"><input type="checkbox" id="scanFoil"><span>Foil erfassen</span></label>
+    <label class="field"><span>Set-Filter (Abgleich und Suche nur in diesem Set)</span>
+      <select id="setFilter"><option value="">Alle Sets</option></select></label>
 
     <div id="suggest" class="suggest" hidden>
-      <p class="muted">Unsicher erkannt. Tippe die richtige Karte an:</p>
+      <p id="suggTitle" class="muted">Unsicher erkannt. Tippe die richtige Karte an:</p>
       <div id="chips" class="chips"></div>
     </div>
 

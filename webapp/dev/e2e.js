@@ -51,6 +51,7 @@ async function openApp(ctx, url) {
 }
 const setRange = (page, sel, v) => page.evaluate(([q, val]) => { const el = document.querySelector(q); el.value = String(val); el.dispatchEvent(new Event('input', { bubbles: true })); }, [sel, v]);
 const tab = (page, v) => page.click(`.tab[data-view="${v}"]`);
+const lastRec = async () => (await api('GET', '/api/scans')).body.at(-1);
 const scanCount = async () => (await api('GET', '/api/scans')).body.length;
 
 async function main() {
@@ -64,11 +65,11 @@ async function main() {
   const page = await openApp(ctx);
 
   /* ---------- Start und Daten ---------- */
-  await check('Start: Daten geladen (25 Beispielkarten)', async () => {
+  await check('Start: Daten geladen (26 Beispielkarten)', async () => {
     const info = await page.textContent('#dataInfo');
-    assert.match(info, /25 Karten/);
+    assert.match(info, /26 Karten/);
     const st = await page.evaluate(() => window.__wow.state());
-    assert.equal(st.indexed, 25);
+    assert.equal(st.indexed, 26);
     assert.equal(st.settings.currency, 'EUR');
     assert.match(await page.textContent('#espPill'), /Scanner .* Scans/);
   });
@@ -87,80 +88,170 @@ async function main() {
   await page.screenshot({ path: path.join(SHOTS, '01-scan.png') });
 
   /* ---------- Abgleich ---------- */
-  await check('Abgleich: exakter Name', async () => {
-    const m = await page.evaluate(() => window.__wow.testMatch('Sample Knight of Testing', '001/120'));
-    assert.equal(m.top.pid, 900001);
+  const unlock = async () => { await page.evaluate(() => window.__wow.frame('', '')); await page.evaluate(() => window.__wow.frame('', '')); };
+  const frame = (n, num = '') => page.evaluate(([a, b]) => window.__wow.frame(a, b), [n, num]);
+  await check('Abgleich: exakter Name (eindeutige Karte)', async () => {
+    const m = await page.evaluate(() => window.__wow.testMatch('Sample Frost Oracle'));
+    assert.equal(m.top.pid, 900003);
+    assert.deepEqual(m.top.printings, [900003]);
     assert.ok(m.top.score >= 0.99, 'score ' + m.top.score);
   });
   await check('Abgleich: OCR-Fehler (1 Zeichen) wird toleriert', async () => {
-    const m = await page.evaluate(() => window.__wow.testMatch('Sample Knight of Testng', ''));
-    assert.equal(m.top.pid, 900001);
+    const m = await page.evaluate(() => window.__wow.testMatch('Sample Frost Orcle'));
+    assert.equal(m.top.pid, 900003);
     assert.ok(m.top.score >= 0.8, 'score ' + m.top.score);
   });
   await check('Abgleich: Groß/Klein, Sonderzeichen werden normalisiert', async () => {
-    const m = await page.evaluate(() => window.__wow.testMatch('  SAMPLE: ember-warden!  ', ''));
+    const m = await page.evaluate(() => window.__wow.testMatch('  SAMPLE: ember-warden!  '));
     assert.equal(m.top.pid, 900002);
     assert.ok(m.top.score >= 0.99);
   });
-  await check('Abgleich: Priest und Priestess werden getrennt erkannt', async () => {
-    const a = await page.evaluate(() => window.__wow.testMatch('Sample Dawn Priest', '007/120'));
-    const b = await page.evaluate(() => window.__wow.testMatch('Sample Dawn Priest', '008/120'));
-    assert.equal(a.top.pid, 900007);
-    assert.equal(b.top.pid, 900007);
-    const c = await page.evaluate(() => window.__wow.testMatch('Sample Dawn Priestes', '008/120'));
-    assert.equal(c.top.pid, 900008);
+  await check('Abgleich: Priest und Priestess werden getrennt erkannt (ohne Nummer)', async () => {
+    assert.equal((await page.evaluate(() => window.__wow.testMatch('Sample Dawn Priest'))).top.pid, 900007);
+    assert.equal((await page.evaluate(() => window.__wow.testMatch('Sample Dawn Priestes'))).top.pid, 900008);
+  });
+  await check('Abgleich: Namenszusatz "(LOOT)" wird für den Abgleich entfernt', async () => {
+    const a = await page.evaluate(() => window.__wow.testMatch('Sample Lucky Longshot'));
+    assert.equal(a.top.pid, 900019);
+    assert.equal(a.top.name, 'Sample Lucky Longshot (LOOT)');
+    assert.ok(a.top.score >= 0.99, 'score ' + a.top.score);
+    const b = await page.evaluate(() => window.__wow.testMatch('Sample Lucky Longshot (LOOT)'));
+    assert.equal(b.top.pid, 900019);
+  });
+  await check('Abgleich: Nachdrucke werden als mehrere Drucke eines Namens geliefert', async () => {
+    const m = await page.evaluate(() => window.__wow.testMatch('Sample Knight of Testing'));
+    assert.deepEqual(m.top.printings.sort(), [900001, 900016]);
+    const g = await page.evaluate(() => window.__wow.testMatch('Sample Ghost Lantern'));
+    assert.deepEqual(g.top.printings.sort(), [900011, 900026], '"(Foil)"-Zusatz im selben Set');
   });
   await check('Abgleich: Unsinn ergibt keinen Treffer', async () => {
-    const m = await page.evaluate(() => window.__wow.testMatch('qwzx vbnm', ''));
-    assert.equal(m.top, null);
-    const e = await page.evaluate(() => window.__wow.testMatch('', ''));
-    assert.equal(e.top, null);
+    assert.equal((await page.evaluate(() => window.__wow.testMatch('qwzx vbnm'))).top, null);
+    assert.equal((await page.evaluate(() => window.__wow.testMatch(''))).top, null);
   });
   await check('Abgleich: mittlere Sicherheit liefert Vorschläge (0,6-0,8)', async () => {
-    const m = await page.evaluate(() => window.__wow.testMatch('Sample Ember', ''));
+    const m = await page.evaluate(() => window.__wow.testMatch('Sample Ember'));
     assert.ok(m.top.score >= 0.6 && m.top.score < 0.8, 'score ' + m.top.score);
     assert.equal(m.top.pid, 900002);
   });
+  await check('Anzeige: Seltenheit C/U/R/E ausgeschrieben, andere Codes roh', async () => {
+    const r = await page.evaluate(() => ['C', 'U', 'R', 'E', 'L', 'X', null].map(window.__wow.rarityName));
+    assert.deepEqual(r, ['Common', 'Uncommon', 'Rare', 'Epic', 'L', 'X', '']);
+  });
 
   /* ---------- Stabilitätsregel und Sperre ---------- */
-  await check('Stabilität: 1 Frame erfasst nicht, 2 gleiche Frames erfassen genau einmal', async () => {
+  await check('Stabilität: 1 Frame erfasst nicht, 2 gleiche Frames erfassen genau einmal; OCR-Nummer wird gespeichert', async () => {
     const before = await scanCount();
-    await page.evaluate(() => window.__wow.frame('Sample Knight of Testing', '001/120'));
+    await frame('Sample Iron Maiden', '045/120');
     assert.equal(await scanCount(), before, 'nach 1 Frame keine Erfassung');
-    await page.evaluate(() => window.__wow.frame('Sample Knight of Testing', '001/120'));
+    await frame('Sample Iron Maiden', '045/120');
     assert.equal(await scanCount(), before + 1, 'nach 2 Frames eine Erfassung');
-    await page.evaluate(() => window.__wow.frame('Sample Knight of Testing', '001/120'));
-    await page.evaluate(() => window.__wow.frame('Sample Knight of Testing', '001/120'));
+    await frame('Sample Iron Maiden', '045/120');
+    await frame('Sample Iron Maiden', '045/120');
     assert.equal(await scanCount(), before + 1, 'Duplikat unterdrückt, solange dieselbe Karte liegt');
+    const rec = await lastRec();
+    assert.equal(rec.productId, 900012);
+    assert.equal(rec.number, '045/120', 'vom Kartenbild gelesene Nummer');
+    assert.equal(rec.setCode, null, 'leeres Set-Kürzel → null');
+    assert.equal(rec.rarity, 'R');
   });
   await check('Stabilität: Kartenwechsel nach 2 Frames ohne dieselbe Karte, dann neue Erfassung', async () => {
     const before = await scanCount();
-    await page.evaluate(() => window.__wow.frame('Sample Frost Oracle', '003/120'));
-    await page.evaluate(() => window.__wow.frame('Sample Frost Oracle', '003/120'));
+    await frame('Sample Frost Oracle');
+    await frame('Sample Frost Oracle');
     assert.equal(await scanCount(), before, 'nach 2 fremden Frames noch keine Erfassung (erst Entsperren)');
-    await page.evaluate(() => window.__wow.frame('Sample Frost Oracle', '003/120'));
-    await page.evaluate(() => window.__wow.frame('Sample Frost Oracle', '003/120'));
+    await frame('Sample Frost Oracle');
+    await frame('Sample Frost Oracle');
     assert.equal(await scanCount(), before + 1, 'andere Karte nach Wechsel erfasst');
+    assert.equal((await lastRec()).number, null, 'keine Nummer gelesen, keine in Daten');
   });
   await check('Stabilität: Kartenwechsel über leere Frames entsperrt', async () => {
-    await page.evaluate(() => window.__wow.frame('', ''));
-    await page.evaluate(() => window.__wow.frame('', ''));
+    await unlock();
     assert.equal(await page.evaluate(() => window.__wow.state().locked), null);
   });
-  await check('Vorschläge: Top-3 antippen erfasst die gewählte Karte', async () => {
-    await page.evaluate(() => window.__wow.frame('Sample Ember', ''));
+  await check('Vorschläge: antippen erfasst; Preis-Ersatz Mittelpreis wird gespeichert und beschriftet', async () => {
+    await frame('Sample Ember');
     await page.waitForSelector('#suggest:not([hidden]) .chip');
     const chips = await page.$$('#chips .chip');
-    assert.ok(chips.length >= 1 && chips.length <= 3);
+    assert.ok(chips.length >= 1 && chips.length <= 6);
     assert.match(await chips[0].textContent(), /Sample Ember Warden/);
+    assert.match(await chips[0].textContent(), /SAMPLE Set Alpha/);
     const before = await scanCount();
     await chips[0].click();
     await page.waitForTimeout(150);
     assert.equal(await scanCount(), before + 1);
-    const list = (await api('GET', '/api/scans')).body;
-    assert.equal(list.at(-1).productId, 900002);
-    assert.equal(list.at(-1).name, 'Sample Ember Warden');
+    const rec = await lastRec();
+    assert.equal(rec.productId, 900002);
+    assert.equal(rec.priceType, 'mid', 'Marktpreis fehlt → Mittelpreis');
+    assert.equal(rec.price, 0.64);               // 0,70 * 0,92
+    const last = await page.textContent('#last');
+    assert.match(last, /TCGplayer-Preis \(US\), Mittelpreis \(kein Marktpreis verfügbar\), umgerechnet/);
     assert.equal(await page.isHidden('#suggest'), true);
+  });
+  await check('Mehrdeutig: Nachdruck in 2 Sets → keine Auto-Erfassung, Chips „Name · Set · Preis“', async () => {
+    await unlock();
+    const before = await scanCount();
+    for (let i = 0; i < 3; i++) await frame('Sample Knight of Testing');
+    assert.equal(await scanCount(), before, 'keine automatische Erfassung');
+    assert.match(await page.textContent('#suggTitle'), /mehreren Sets/);
+    const texts = await page.locator('#chips .chip').allTextContents();
+    assert.equal(texts.length, 2);
+    assert.ok(texts.some((t) => /SAMPLE Set Alpha · 11,50/.test(t)) && texts.some((t) => /SAMPLE Set Beta · 9,20/.test(t)), texts.join(' | '));
+    await page.screenshot({ path: path.join(SHOTS, '07-reprints.png') });
+    await page.locator('#chips .chip', { hasText: 'SAMPLE Set Beta' }).click();
+    await page.waitForTimeout(150);
+    assert.equal(await scanCount(), before + 1);
+    assert.equal((await lastRec()).productId, 900016);
+    for (let i = 0; i < 2; i++) await frame('Sample Knight of Testing');
+    assert.equal(await scanCount(), before + 1, 'nach Auswahl gesperrt');
+  });
+  await check('Set-Filter: nur ein Druck im gewählten Set → Auto-Erfassung; gespeichert', async () => {
+    await unlock();
+    await page.evaluate(() => window.__wow.setFilter('SAMPLE Set Alpha'));
+    assert.equal(await page.evaluate(() => localStorage.getItem('wowscan.setFilter')), '"SAMPLE Set Alpha"');
+    assert.match(await page.textContent('#dataInfo'), /Set-Filter: SAMPLE Set Alpha/);
+    const before = await scanCount();
+    await frame('Sample Knight of Testing');
+    await frame('Sample Knight of Testing');
+    assert.equal(await scanCount(), before + 1);
+    assert.equal((await lastRec()).productId, 900001);
+    const m = await page.evaluate(() => window.__wow.testMatch('Sample Iron Maiden'));
+    assert.ok(!m.top || m.top.printings.every((p) => p !== 900012), 'Beta-Karte darf im Alpha-Filter nicht passen');
+  });
+  await check('Set-Filter: zwei Drucke im selben Set → weiter Auswahl nötig', async () => {
+    await unlock();
+    await page.evaluate(() => window.__wow.setFilter('SAMPLE Set Beta'));
+    const before = await scanCount();
+    for (let i = 0; i < 3; i++) await frame('Sample Ghost Lantern');
+    assert.equal(await scanCount(), before);
+    assert.equal(await page.locator('#chips .chip').count(), 2);
+  });
+  await check('Set-Filter: manuelle Suche auf Set beschränkt', async () => {
+    await tab(page, 'search');
+    await page.fill('#q', 'knight');
+    await page.waitForTimeout(250);
+    assert.equal(await page.locator('#results .row-btn').count(), 1);
+    assert.match(await page.textContent('#results'), /SAMPLE Set Beta/);
+    assert.match(await page.textContent('#searchInfo'), /nur Set/);
+    await page.evaluate(() => window.__wow.setFilter(''));
+    await page.fill('#q', 'knight ');
+    await page.waitForTimeout(250);
+    assert.equal(await page.locator('#results .row-btn').count(), 2);
+    await tab(page, 'scan');
+  });
+  await check('Namenszusatz: "Sample Lucky Longshot" erfasst die (LOOT)-Karte, voller Name angezeigt', async () => {
+    await unlock();
+    const before = await scanCount();
+    await frame('Sample Lucky Longshot');
+    await frame('Sample Lucky Longshot');
+    assert.equal(await scanCount(), before + 1);
+    const rec = await lastRec();
+    assert.equal(rec.name, 'Sample Lucky Longshot (LOOT)');
+    assert.equal(rec.priceType, 'mid');
+    assert.equal(rec.price, 55.2);               // 60,00 * 0,92
+    const recent = await page.textContent('#recent');
+    assert.match(recent, /Sample Lucky Longshot \(LOOT\)/);
+    assert.doesNotMatch(recent, /#null|#undefined|· ·/);
+    assert.match(await page.textContent('#last'), /SAMPLE Loot Promos · L/);
   });
 
   /* ---------- Preise ---------- */
@@ -169,26 +260,39 @@ async function main() {
     assert.equal(n.usd, 12.5);
     assert.equal(n.value, 11.5);                 // 12,50 * 0,92
     const f = await page.evaluate(() => window.__wow.priceInfo(900001, true, 'market', 'EUR'));
-    assert.equal(f.usd, 30);
     assert.equal(f.value, 27.6);
     const low = await page.evaluate(() => window.__wow.priceInfo(900001, false, 'low', 'CHF'));
     assert.equal(low.value, 7.84);               // 9,80 * 0,80
-    const usd = await page.evaluate(() => window.__wow.priceInfo(900001, false, 'market', 'USD'));
-    assert.equal(usd.value, 12.5);
+    assert.equal((await page.evaluate(() => window.__wow.priceInfo(900001, false, 'market', 'USD'))).value, 12.5);
+  });
+  await check('Preis-Ersatz: Markt → Mittel → Tiefst, gewählte Art zuerst', async () => {
+    const pi = (pid, pt) => page.evaluate(([a, b]) => window.__wow.priceInfo(a, false, b, 'EUR'), [pid, pt]);
+    let r = await pi(900002, 'market');
+    assert.deepEqual([r.pt, r.fallback, r.value], ['mid', true, 0.64]);
+    r = await pi(900009, 'market');
+    assert.deepEqual([r.pt, r.value], ['mid', 5.05]);               // 5,49 * 0,92
+    r = await pi(900005, 'market');
+    assert.deepEqual([r.pt, r.value], ['low', 36.8]);               // nur Tiefstpreis
+    r = await pi(900005, 'mid');
+    assert.deepEqual([r.pt, r.wanted, r.value], ['low', 'mid', 36.8]);
+    r = await pi(900013, 'low');
+    assert.deepEqual([r.pt, r.fallback, r.value], ['low', false, 25.29]); // 27,49 * 0,92
+    r = await pi(900001, 'mid');
+    assert.deepEqual([r.pt, r.fallback, r.value], ['mid', false, 10.12]); // 11,00 * 0,92
   });
   await check('Preis: nur ein Subtyp → dieser wird genutzt (auch bei Foil-Wunsch)', async () => {
     const a = await page.evaluate(() => window.__wow.priceInfo(900004, true, 'market', 'EUR'));
     assert.equal(a.sub, 'Normal');
     assert.equal(a.single, true);
-    assert.equal(a.value, 0.09);                 // 0,10 * 0,92 = 0,092 → 0,09
+    assert.equal(a.value, 0.09);
     const b = await page.evaluate(() => window.__wow.priceInfo(900006, false, 'market', 'EUR'));
     assert.equal(b.sub, 'Foil');
     assert.equal(b.value, 5.52);
   });
-  await check('Preis: fehlend → null (kein Preis), Produkt ohne Daten → null', async () => {
+  await check('Preis: alle drei null → kein Preis; Produkt ohne Daten → kein Preis', async () => {
     const a = await page.evaluate(() => window.__wow.priceInfo(900003, false, 'market', 'EUR'));
     assert.equal(a.value, null);
-    assert.match(a.note, /kein Preis|Preis/);
+    assert.match(a.note, /kein Preis/);
     const b = await page.evaluate(() => window.__wow.priceInfo(900024, false, 'market', 'EUR'));
     assert.equal(b.value, null);
     assert.match(b.note, /Keine Preisdaten/);
@@ -208,7 +312,7 @@ async function main() {
     const f = await page.evaluate(() => window.__wow.subKey(900001, false));
     assert.equal(f.sub, 'Normal');
     const g = await page.evaluate(() => window.__wow.subKey(900003, true));
-    assert.equal(g.sub, 'Foil');                 // hat nur Foil-Schlüssel (Einzelregel)
+    assert.equal(g.sub, 'Foil');                 // Normal komplett null, Foil vorhanden
     assert.equal(g.isFoil, true);
   });
 
@@ -226,6 +330,20 @@ async function main() {
     await page.fill('#q', 'xyzzy');
     await page.waitForTimeout(250);
     assert.match(await page.textContent('#searchInfo'), /Keine Treffer/);
+  });
+  await check('Suche: Dialog beschriftet Preis-Ersatz und zeigt keine leere Nummer', async () => {
+    await page.fill('#q', 'ember');
+    await page.waitForTimeout(250);
+    await page.click('#results .row-btn');
+    await page.waitForSelector('#dlg[open]');
+    const body = await page.textContent('#dlgBody');
+    assert.match(body, /TCGplayer-Preis \(US\), Mittelpreis \(kein Marktpreis verfügbar\), umgerechnet, Stand 25\.10\.2026/);
+    assert.match(body, /SAMPLE Set Alpha · Uncommon/);
+    assert.doesNotMatch(body, /#/);
+    await page.click('#dlg button[value=cancel]');
+    await page.fill('#q', 'crystal golem');
+    await page.waitForTimeout(250);
+    assert.match(await page.textContent('#results'), /SAMPLE Set Alpha · #12\/100 · Rare/);
   });
   await check('Suche: Holofoil-Produkt speichert foil=true und Holofoil-Preis', async () => {
     await page.fill('#q', 'moon holo');
@@ -264,8 +382,9 @@ async function main() {
     assert.equal(rec.ocrConfidence, null);
     assert.equal(rec.price, 0.55);               // 0,60 * 0,92 = 0,552
     assert.equal(rec.priceUsd, 0.6);
-    assert.equal(rec.number, '045/80');
-    assert.equal(rec.setCode, 'SMB');
+    assert.equal(rec.number, null);
+    assert.equal(rec.setCode, null);
+    assert.equal(rec.type, null);
     assert.equal(await page.isVisible('#dlg[open]'), false);
   });
 
@@ -330,7 +449,7 @@ async function main() {
     await dl.saveAs(file);
     const t = fs.readFileSync(file, 'utf8');
     assert.match(t, /Karten gesamt: \d+/);
-    assert.match(t, /Preisquelle: TCGplayer-Marktpreis \(US\), umgerechnet/);
+    assert.match(t, /Preisquelle: TCGplayer-Preis \(US\)/);
     assert.match(t, /Top 10 teuerste/);
   });
   await page.screenshot({ path: path.join(SHOTS, '03-collection.png'), fullPage: true });
@@ -457,7 +576,7 @@ async function main() {
     await p2.evaluate(() => window.__wow.ready);
     await p2.waitForSelector('#banner .banner.warn');
     assert.match(await p2.textContent('#banner'), /Offline: gecachte Daten/);
-    assert.match(await p2.textContent('#dataInfo'), /25 Karten/);
+    assert.match(await p2.textContent('#dataInfo'), /26 Karten/);
     await p2.close();
   });
 
@@ -472,7 +591,7 @@ async function main() {
     await p3.evaluate(() => window.__wow.ready);
     await p3.waitForTimeout(300);
     assert.match(await p3.textContent('#espPill'), /nicht erreichbar/);
-    assert.match(await p3.textContent('#dataInfo'), /25 Karten/);
+    assert.match(await p3.textContent('#dataInfo'), /26 Karten/);
     await p3.click('.tab[data-view="coll"]');
     assert.match(await p3.textContent('#scanList'), /Noch keine Scans|Sammlung|Karten/);
     await ctx2.close();

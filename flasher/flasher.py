@@ -23,7 +23,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from certgen import generate_self_signed
-from flashing import FlashError, flash_firmware, install_router
+from flashing import FlashError, check_esptool_stub, flash_firmware, install_router
 from provisioning import (
     COUNTRIES,
     COUNTRY_CURRENCY,
@@ -50,11 +50,13 @@ SETTLE_AFTER_FLASH_S = 1.5  # Zeit nach hard_reset, bis das Gerät wieder am Por
 class Job:
     """Eine Aufgabe für den Worker-Thread."""
 
-    def __init__(self, mode: str, port: str, cfg: ProvisionConfig, firmware: Optional[Path]):
+    def __init__(self, mode: str, port: str, cfg: ProvisionConfig, firmware: Optional[Path],
+                 use_stub: bool = True):
         self.mode = mode  # "flash" oder "settings"
         self.port = port
         self.cfg = cfg
         self.firmware = firmware
+        self.use_stub = use_stub
 
 
 def run_job(job: Job, post: Callable[[tuple], None]) -> None:
@@ -89,6 +91,7 @@ def run_job(job: Job, post: Callable[[tuple], None]) -> None:
                 str(job.firmware),
                 log=lambda msg: post(("log", msg)),
                 on_percent=lambda pct: post(("progress", 5 + pct * 0.65)),
+                use_stub=job.use_stub,
             )
             flashed = True
             post(("progress", 70))
@@ -129,12 +132,16 @@ class App:
         self.firmware: Optional[Path] = find_firmware(FROZEN, MEIPASS, BASE_DIR)
         self.ports: List[SerialPortInfo] = []
         self._port_labels: Dict[str, str] = {}
+        self.stub_error: Optional[str] = check_esptool_stub()
 
         root.title(WINDOW_TITLE)
         root.minsize(640, 560)
         self._build()
         self._refresh_ports(keep_selection=False)
         self._update_firmware_label()
+        if self.stub_error:
+            self._log(f"FEHLER: {self.stub_error}")
+            self.status_var.set("Achtung: esptool-Stub fehlt – siehe Protokoll.")
         self.root.after(80, self._poll)
 
     # ------------------------------------------------------------------ GUI
@@ -400,7 +407,8 @@ class App:
         self._clear_log()
         self.progress["value"] = 0
         self.status_var.set("Läuft …")
-        job = Job(mode, port, cfg, self.firmware if mode == "flash" else None)
+        job = Job(mode, port, cfg, self.firmware if mode == "flash" else None,
+                  use_stub=self.stub_error is None)
         worker = threading.Thread(target=run_job, args=(job, self.queue.put), daemon=True, name="flasher-worker")
         worker.start()
 
@@ -469,8 +477,32 @@ class App:
         self.log_text.configure(state="disabled")
 
 
+def selftest() -> int:
+    """Prüft das Bundle ohne GUI: esptool-Stub und Firmware vorhanden.
+
+    Exit-Code 0 = alles da, Bit 1 = ESP8266-Stub fehlt, Bit 2 = firmware.bin fehlt.
+    Wird im CI gegen die fertige EXE ausgeführt (--selftest).
+    """
+    code = 0
+    stub_error = check_esptool_stub()
+    if stub_error:
+        print(f"FEHLER: {stub_error}")
+        code |= 1
+    else:
+        print("OK: esptool-Stub für ESP8266 gefunden.")
+    firmware = find_firmware(FROZEN, MEIPASS, BASE_DIR)
+    if firmware is None:
+        print("FEHLER: firmware.bin nicht gefunden.")
+        code |= 2
+    else:
+        print(f"OK: Firmware gefunden: {firmware}")
+    return code
+
+
 def main() -> None:
     install_router()  # --windowed hat kein stdout; esptool-Ausgabe läuft über den Router ins Log
+    if "--selftest" in sys.argv[1:]:
+        sys.exit(selftest())
     root = tk.Tk()
     App(root)
     root.mainloop()

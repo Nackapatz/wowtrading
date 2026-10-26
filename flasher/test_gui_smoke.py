@@ -62,6 +62,7 @@ def test_run_job_flash_mode_flashes_then_provisions(monkeypatch, tmp_path):
     def fake_flash(port, path, **kw):
         order.append("flash")
         assert path == str(fw)
+        assert kw["use_stub"] is True
         return 460800
 
     def fake_provision(ser, cfg, **kw):
@@ -92,6 +93,23 @@ def test_run_job_reports_errors_in_german(monkeypatch):
     job = flasher.Job("settings", "COM7", ProvisionConfig(ssid="X", password="", ota_password="ota-passwort-1"), None)
     flasher.run_job(job, events.append)
     assert events[-1] == ("error", "Das Gerät meldet sich nicht.")
+
+
+def test_selftest_exit_codes(monkeypatch, tmp_path):
+    monkeypatch.setattr(flasher, "check_esptool_stub", lambda: None)
+    monkeypatch.setattr(flasher, "find_firmware", lambda *a: tmp_path / "firmware.bin")
+    assert flasher.selftest() == 0
+    monkeypatch.setattr(flasher, "check_esptool_stub", lambda: "Stub fehlt")
+    assert flasher.selftest() == 1
+    monkeypatch.setattr(flasher, "find_firmware", lambda *a: None)
+    assert flasher.selftest() == 3
+
+
+def test_missing_stub_is_logged_at_startup_and_disables_stub(root, monkeypatch):
+    monkeypatch.setattr(flasher, "check_esptool_stub", lambda: "Die esptool-Stub-Datei fehlt.")
+    app = flasher.App(root)
+    assert "FEHLER: Die esptool-Stub-Datei fehlt." in app.log_text.get("1.0", "end")
+    assert app.stub_error is not None
 
 
 class _Dummy:

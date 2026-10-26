@@ -83,9 +83,11 @@ bool isCode(const String& text, unsigned int length) {
 CardView makeCardView(JsonDocument& scan) {
     CardView view;
     view.name = textOf(scan["name"]);
+    // TCGplayer has no set code for many WoW sets; fall back to the set name.
     view.setLine = textOf(scan["setCode"]);
+    if (view.setLine.isEmpty()) view.setLine = textOf(scan["set"]);
     const String number = textOf(scan["number"]);
-    if (!number.isEmpty()) view.setLine += " #" + number;
+    if (!number.isEmpty()) view.setLine += view.setLine.isEmpty() ? "#" + number : " #" + number;
     view.rarity = textOf(scan["rarity"]);
 
     const JsonVariantConst price = scan["price"];

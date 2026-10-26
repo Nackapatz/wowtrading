@@ -18,6 +18,7 @@ const SOURCE = 'TCGplayer via tcgcsv.com';
 const LS_UI = 'wowscan.ui';
 const LS_SET = 'wowscan.settings';
 const LS_CAL = 'wowscan.calib';
+const LS_FLT = 'wowscan.setFilter';
 const INSECURE_MSG = 'Die Kamera braucht eine sichere Verbindung (HTTPS). Öffne die Seite über https://<IP-des-Scanners>/ und bestätige die Zertifikatswarnung deines Browsers (z. B. „Erweitert“ → „Weiter zu … (unsicher)“). Das Zertifikat erzeugt dein Scanner selbst, deshalb warnt der Browser.';
 
 // Land → [Name, Währung]
@@ -33,6 +34,13 @@ const CUR_OF = Object.fromEntries(COUNTRIES.map(([c, , cur]) => [c, cur]));
 const EURO_COMMA = new Set(['EUR', 'CHF', 'PLN', 'CZK', 'SEK', 'DKK', 'NOK', 'HUF']);
 const PT_LABEL = { market: 'Marktpreis', low: 'Tiefstpreis', mid: 'Mittelpreis' };
 const PT_IDX = { market: 0, low: 1, mid: 2 };
+const PT_ORDER = ['market', 'mid', 'low'];
+const RARITY = { C: 'Common', U: 'Uncommon', R: 'Rare', E: 'Epic' }; // andere Codes roh anzeigen, nicht raten
+const rarityName = (r) => RARITY[r] || (r == null ? '' : String(r));
+const setName = (s, sc) => s || sc || '';
+// Anzeigezeile: Set · #Nummer · Seltenheit (leere Teile entfallen)
+const metaLine = (...parts) => parts.filter((x) => x != null && x !== '').join(' · ');
+const numPart = (n) => (n ? '#' + n : '');
 
 const fmtMoney = (v, cur) => (typeof v !== 'number' ? 'kein Preis'
   : new Intl.NumberFormat('de-DE', { style: 'currency', currency: cur, maximumFractionDigits: cur === 'JPY' ? 0 : 2 }).format(v));
@@ -44,8 +52,12 @@ function fmtUptime(sec) {
   const s = Number(sec) || 0;
   return `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`;
 }
-function priceLabel(pt, cur, date) {
-  return `TCGplayer-${PT_LABEL[pt] || PT_LABEL.market} (US)${cur === 'USD' ? '' : ', umgerechnet'}, Stand ${fmtDate(date)}`;
+function ptText(pt, wanted) {
+  const t = PT_LABEL[pt] || PT_LABEL.market;
+  return wanted && wanted !== pt ? `${t} (kein ${PT_LABEL[wanted]} verfügbar)` : t;
+}
+function priceLabel(pt, cur, date, wanted) {
+  return `TCGplayer-Preis (US), ${ptText(pt, wanted)}${cur === 'USD' ? '' : ', umgerechnet'}, Stand ${fmtDate(date)}`;
 }
 function lsGet(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } }
 // OCR-Kalibrierung: Verschiebung der Ausschnitte in Prozent der Kartenhöhe (-10..10) + Debug-Schalter
@@ -63,6 +75,9 @@ const S = {
   settings: { country: 'DE', currency: 'EUR', dataUrl: '' },
   ui: { priceType: 'market', foil: false, cond: 'NM', ...(lsGet(LS_UI) || {}) },
   cal: loadCal(),
+  setFilter: String(lsGet(LS_FLT) || ''),
+  lastWanted: null,
+  suggKey: '',
   esp: null,
   data: null,          // { meta, cards, prices, rates }
   idx: null,           // Suchindex (vorberechnet)
@@ -234,6 +249,7 @@ async function loadData(force = false) {
   }
   S.data = set;
   buildIndex();
+  renderSetFilter();
   setBanner('data', note ? 'warn' : '', note);
   renderAll();
   return true;
@@ -284,52 +300,67 @@ function lev(a, b, max) {
   }
   return prev[lb];
 }
-function numKey(s) {
-  const t = String(s ?? '');
-  const m = /(\d{1,3})\s*\/\s*\d{1,3}/.exec(t) || /(\d{1,4})/.exec(t);
-  return m ? parseInt(m[1], 10) : -1;
+// Namenszusätze am Ende wie "(LOOT)" oder "(Foil)" entfernen – nur für den Abgleich, Anzeige bleibt voll.
+function stripSuffix(n) {
+  const full = String(n ?? '');
+  let t = full, prev;
+  do { prev = t; t = t.replace(/\s*\([^()]*\)\s*$/, ''); } while (t !== prev && t);
+  return t || full;
+}
+const baseKey = (card) => norm(stripSuffix(card.n));
+// Sammlernummer vom Kartenbild (nur gespeichert/angezeigt, nicht für den Abgleich)
+function parseNum(t) {
+  const m = /(\d{1,3})\s*\/\s*(\d{1,3})/.exec(String(t ?? ''));
+  return m ? `${m[1]}/${m[2]}` : null;
 }
 function buildIndex() {
   const t0 = performance.now();
   const cards = S.data.cards.cards || [];
   const n = cards.length;
-  const names = new Array(n), lens = new Uint16Array(n), tris = new Array(n), nums = new Int32Array(n);
+  const names = new Array(n), byBase = new Map(), sets = new Set();
   for (let i = 0; i < n; i++) {
-    const nm = norm(cards[i].n);
-    names[i] = nm; lens[i] = nm.length; tris[i] = trigrams(nm); nums[i] = numKey(cards[i].num);
+    names[i] = norm(cards[i].n);
+    const b = baseKey(cards[i]);
+    let a = byBase.get(b);
+    if (!a) byBase.set(b, (a = []));
+    a.push(i);
+    if (cards[i].s) sets.add(cards[i].s);
   }
-  S.idx = { cards, names, lens, tris, nums, n, ms: performance.now() - t0 };
+  const bases = [...byBase.keys()], m = bases.length;
+  const lens = new Uint16Array(m), tris = new Array(m), members = new Array(m);
+  for (let k = 0; k < m; k++) { lens[k] = bases[k].length; tris[k] = trigrams(bases[k]); members[k] = byBase.get(bases[k]); }
+  S.idx = { cards, names, bases, lens, tris, members, n, m, sets: [...sets].sort((a, b) => a.localeCompare(b, 'de')), ms: performance.now() - t0 };
+  if (S.setFilter && !S.idx.sets.includes(S.setFilter)) { S.setFilter = ''; lsSet(LS_FLT, ''); }
 }
 const MIN_SIM = 0.5;
-/* Liefert die besten Kandidaten {card, score} (score 0..1). Reihenfolge: Länge → Trigramme → Levenshtein. */
-function matchName(nameText, numText = '') {
+/* Abgleich gegen eindeutige Grundnamen (ohne Zusatz). Liefert [{base, score, cards (Drucke, ggf. nach Set gefiltert), card}].
+ * Reihenfolge: Länge → Trigramme → Levenshtein. */
+function matchName(nameText) {
   const t0 = performance.now();
   const idx = S.idx;
-  const q = norm(nameText);
+  const q = norm(stripSuffix(nameText));
   if (!idx || q.length < 3) return { ranked: [], ms: 0 };
-  const qt = trigrams(q), ql = q.length, nk = numKey(numText);
+  const qt = trigrams(q), ql = q.length, flt = S.setFilter;
   const hits = [];
-  for (let i = 0; i < idx.n; i++) {
-    const L = idx.lens[i];
+  for (let k = 0; k < idx.m; k++) {
+    const L = idx.lens[k];
     const maxL = L > ql ? L : ql;
     const maxD = Math.floor((1 - MIN_SIM) * maxL);
     if (Math.abs(L - ql) > maxD) continue;
-    const ti = idx.tris[i];
+    const ti = idx.tris[k];
     const inter = interCount(qt, ti);
     if (inter === 0 || (2 * inter) / (qt.length + ti.length) < 0.2) continue;
-    const d = lev(q, idx.names[i], maxD);
+    let mem = idx.members[k];
+    if (flt) { mem = mem.filter((i) => idx.cards[i].s === flt); if (!mem.length) continue; }
+    const d = lev(q, idx.bases[k], maxD);
     if (d > maxD) continue;
-    hits.push({ i, sim: 1 - d / maxL });
+    hits.push({ k, sim: 1 - d / maxL, mem });
   }
   hits.sort((a, b) => b.sim - a.sim);
-  const top = hits.slice(0, 12);
-  // Nummer verfeinert nur bei (fast) gleichen Namens-Treffern
-  if (nk >= 0 && top.length) {
-    const best = top[0].sim;
-    for (const h of top) if (h.sim >= best - 0.03 && idx.nums[h.i] === nk) h.sim = Math.min(1, h.sim + 0.03);
-    top.sort((a, b) => b.sim - a.sim);
-  }
-  return { ranked: top.slice(0, 10).map((h) => ({ card: idx.cards[h.i], score: h.sim })), ms: performance.now() - t0 };
+  return {
+    ranked: hits.slice(0, 10).map((h) => ({ base: idx.bases[h.k], score: h.sim, cards: h.mem.map((i) => idx.cards[i]), card: idx.cards[h.mem[0]] })),
+    ms: performance.now() - t0,
+  };
 }
 
 /* ============================================================
@@ -343,13 +374,19 @@ function pickSub(keys, foil) {
   if (keys.includes('Normal')) return 'Normal';
   return keys.find((k) => !/foil/i.test(k)) ?? keys[0];
 }
+// Preisart: gewählte zuerst, dann Ersatz in der Reihenfolge Markt → Mittel → Tiefst.
 function priceInfo(card, foil, pt = S.ui.priceType, cur = S.settings.currency) {
   const pe = S.data && S.data.prices && S.data.prices.prices ? S.data.prices.prices[card.p] : null;
   const keys = pe ? Object.keys(pe) : [];
   const sub = pickSub(keys, foil);
   const arr = pe && sub != null ? pe[sub] : null;
-  const raw = Array.isArray(arr) ? arr[PT_IDX[pt]] : null;
-  const usd = typeof raw === 'number' && isFinite(raw) ? raw : null;
+  let usd = null, used = pt;
+  if (Array.isArray(arr)) {
+    for (const t of [pt, ...PT_ORDER.filter((x) => x !== pt)]) {
+      const v = arr[PT_IDX[t]];
+      if (typeof v === 'number' && isFinite(v)) { usd = v; used = t; break; }
+    }
+  }
   let value = null, note = '';
   if (usd != null) {
     const rate = cur === 'USD' ? 1 : (S.data && S.data.rates && S.data.rates.rates ? S.data.rates.rates[cur] : undefined);
@@ -359,25 +396,26 @@ function priceInfo(card, foil, pt = S.ui.priceType, cur = S.settings.currency) {
     note = pe ? `kein Preis für ${sub}-Druck` : 'Keine Preisdaten für dieses Produkt';
   }
   return {
-    sub, single: keys.length === 1, isFoil: sub != null && /foil/i.test(sub), usd, value, pt, cur, note,
+    sub, single: keys.length === 1, isFoil: sub != null && /foil/i.test(sub), usd, value, pt: used, wanted: pt,
+    fallback: usd != null && used !== pt, cur, note,
     date: (S.data && S.data.prices && S.data.prices.priceDate) || (S.data && S.data.meta && S.data.meta.priceDate) || '',
   };
 }
 function priceBlockHtml(pi) {
   if (pi.value == null) return `<div class="price none">kein Preis</div><div class="src">${esc(pi.note)}</div>`;
-  return `<div class="price num">${esc(fmtMoney(pi.value, pi.cur))}</div><div class="src">${esc(priceLabel(pi.pt, pi.cur, pi.date))}</div>`;
+  return `<div class="price num">${esc(fmtMoney(pi.value, pi.cur))}</div><div class="src">${esc(priceLabel(pi.pt, pi.cur, pi.date, pi.wanted))}</div>`;
 }
 function priceShort(r) {
   return typeof r.price === 'number' ? esc(fmtMoney(r.price, r.currency)) : 'kein Preis';
 }
 
 /* Scan-Datensatz (Feldnamen exakt nach Spec, Abschnitt 1) */
-function buildRecord(card, { foil, cond, qty = 1, ocr = null }) {
+function buildRecord(card, { foil, cond, qty = 1, ocr = null, number = null }) {
   const pi = priceInfo(card, foil);
   const x = card.x || {};
   return {
     ts: new Date().toISOString(),
-    productId: card.p, name: card.n, set: card.s, setCode: card.sc, number: card.num, rarity: card.r, type: card.t,
+    productId: card.p, name: card.n, set: card.s, setCode: card.sc || null, number: number || card.num || null, rarity: card.r ?? null, type: card.t ?? null,
     cardClass: x.Class ?? null, faction: x.Faction ?? null, cost: x.Cost ?? null, atk: x.ATK ?? null, health: x.Health ?? null,
     foil: pi.sub != null ? pi.isFoil : !!foil,
     condition: cond, qty,
@@ -395,12 +433,14 @@ async function captureCard(card, opts = {}) {
   const foil = opts.foil ?? S.ui.foil;
   const cond = opts.cond ?? S.ui.cond;
   if (S.scans.length >= MAX_SCANS) { toast('Speicher voll: maximal 2000 Scans. Bitte Einträge löschen.', 'err'); return null; }
-  const rec = buildRecord(card, { foil, cond, qty: opts.qty || 1, ocr: opts.ocr ?? null });
+  const rec = buildRecord(card, { foil, cond, qty: opts.qty || 1, ocr: opts.ocr ?? null, number: opts.number || null });
   try {
     const res = await api('POST', 'api/scan', rec);
     rec.id = res.id;
+    S.lastWanted = { id: rec.id, wanted: S.ui.priceType };
     S.scans.unshift(rec);
     S.lastId = rec.id;
+    setPill(true, `Scanner online · ${S.scans.length} Scans`);
     feedback(rec);
     renderAll();
     return rec;
@@ -491,18 +531,19 @@ async function scanFrame() {
   const name = String((a.data && a.data.text) || '').replace(/\s+/g, ' ').trim();
   const num = String((b.data && b.data.text) || '').trim();
   const conf = (a.data && a.data.confidence) || 0;
-  const m = matchName(name, num);
-  S.dbg = { name, num, conf, top: m.ranked[0] || null };
+  const m = matchName(name);
+  const numRead = parseNum(num);
+  S.dbg = { name, num, numRead, conf, top: m.ranked[0] || null };
   renderDbg();
-  await onFrame(m, name, num, conf);
+  await onFrame(m, name, numRead, conf);
 }
 function renderDbg() {
   $('#dbg').hidden = !S.cal.debug;
   if (!S.cal.debug || !S.dbg) return;
   const d = S.dbg;
   $('#dbgTxt').textContent = `Name roh: "${d.name}" (Konfidenz ${Math.round(d.conf)})\n`
-    + `Nummer roh: "${d.num}"\n`
-    + `Treffer: ${d.top ? `${d.top.card.n} (${Math.round(d.top.score * 100)} %)` : '–'}`;
+    + `Nummer roh: "${d.num}" → ${d.numRead || '–'} (nur gespeichert, nicht für den Abgleich)\n`
+    + `Treffer: ${d.top ? `${d.top.card.n} (${Math.round(d.top.score * 100)} %, ${d.top.cards.length} Druck/e)` : '–'}`;
 }
 
 /* Stabilitätsregel: gleiche Karte in 2 aufeinanderfolgenden Frames (>= 0,8) erfassen;
@@ -512,43 +553,60 @@ async function onFrame(m, name, num, conf) {
   const sc = c ? c.score : 0;
   const pct = Math.round(sc * 100);
   if (S.locked !== null) {
-    if (c && c.card.p === S.locked && sc >= 0.6) { S.others = 0; setLive(`Erfasst: ${c.card.n}. Nächste Karte auflegen.`); return; }
+    if (c && c.base === S.locked && sc >= 0.6) { S.others = 0; setLive(`Erfasst: ${c.card.n}. Nächste Karte auflegen.`); return; }
     if (++S.others < 2) return;
     S.locked = null; S.others = 0;
   }
   if (c && sc >= 0.8) {
-    if (S.streakPid === c.card.p) S.streak++;
-    else { S.streakPid = c.card.p; S.streak = 1; }
+    // Mehrere Drucke (Nachdrucke in anderen Sets): nicht automatisch erfassen, Nutzer wählt.
+    if (c.cards.length > 1) {
+      S.streak = 0; S.streakPid = null;
+      setLive(`${stripSuffix(c.card.n)}: ${c.cards.length} Drucke – bitte Set wählen`);
+      showSuggest(c.cards.slice(0, 6).map((card) => ({ card, score: sc })), 'Diese Karte gibt es in mehreren Sets. Tippe den richtigen Druck an:', num);
+      return;
+    }
+    if (S.streakPid === c.base) S.streak++;
+    else { S.streakPid = c.base; S.streak = 1; }
     hideSuggest();
     if (S.streak >= 2) {
       S.streak = 0; S.streakPid = null;
-      S.locked = c.card.p; S.others = 0;
+      S.locked = c.base; S.others = 0;
       setLive(`Erkannt: ${c.card.n}`);
-      const rec = await captureCard(c.card, { ocr: Math.round(conf) });
+      const rec = await captureCard(c.card, { ocr: Math.round(conf), number: num });
       if (!rec) S.locked = null;
       return;
     }
-    setLive(`Erkannt: ${c.card.n} (${pct} %), Bestätigung …`);
+    setLive(`Erkannt: ${c.card.n} (${pct} %)${num ? ' · #' + num : ''}, Bestätigung …`);
     return;
   }
   S.streak = 0; S.streakPid = null;
   if (c && sc >= 0.6) {
     setLive(`Unsicher: ${pct} % – bitte Vorschlag wählen`);
-    showSuggest(m.ranked.filter((r) => r.score >= 0.6).slice(0, 3));
+    const list = [];
+    for (const r of m.ranked.filter((x) => x.score >= 0.6).slice(0, 3)) for (const card of r.cards) if (list.length < 6) list.push({ card, score: r.score });
+    showSuggest(list, 'Unsicher erkannt. Tippe die richtige Karte an:', num);
   } else {
     hideSuggest();
     setLive(name ? `Gelesen: „${name}“` : 'Suche Karte …');
   }
 }
 
-function showSuggest(list) {
-  S.sugg = list;
-  $('#chips').innerHTML = list.map((r, i) => `<button class="chip" type="button" data-si="${i}">
-      ${esc(r.card.n)}<b>${Math.round(r.score * 100)} %</b>
-      <small>${esc(r.card.s)} · #${esc(r.card.num)} · ${esc(priceShort({ price: priceInfo(r.card, S.ui.foil).value, currency: S.settings.currency }))}</small></button>`).join('');
+// Vorschläge „Name · Set · Preis“; unverändert gebliebene Liste nicht neu zeichnen (Antippen bleibt stabil).
+function showSuggest(list, title, num = null) {
+  const key = list.map((r) => r.card.p).join(',');
+  S.sugg = list; S.suggNum = num;
+  $('#suggTitle').textContent = title;
+  if (key !== S.suggKey || $('#suggest').hidden) {
+    S.suggKey = key;
+    $('#chips').innerHTML = list.map((r, i) => {
+      const pi = priceInfo(r.card, S.ui.foil);
+      return `<button class="chip" type="button" data-si="${i}">${esc(r.card.n)}<b>${Math.round(r.score * 100)} %</b>
+      <small>${esc(metaLine(setName(r.card.s, r.card.sc), pi.value == null ? 'kein Preis' : fmtMoney(pi.value, pi.cur) + (pi.fallback ? ' (' + PT_LABEL[pi.pt] + ')' : '')))}</small></button>`;
+    }).join('');
+  }
   $('#suggest').hidden = list.length === 0;
 }
-function hideSuggest() { $('#suggest').hidden = true; S.sugg = []; }
+function hideSuggest() { $('#suggest').hidden = true; S.sugg = []; S.suggKey = ''; }
 
 function layoutGuide() {
   const cam = $('#cam'), video = $('#video'), g = $('#guide');
@@ -733,7 +791,7 @@ function summarize(list) {
     out.count += q;
     if (tot == null) out.noPrice += q; else out.total += tot;
     add(out.bySet, r.setCode || r.set || '?', r.set || r.setCode || '?', q, tot);
-    add(out.byRar, r.rarity || '–', r.rarity || '–', q, tot);
+    add(out.byRar, r.rarity || '–', rarityName(r.rarity) || '–', q, tot);
     if (unit != null) out.priced.push({ r, unit });
   }
   out.total = round2(out.total);
@@ -747,16 +805,20 @@ function groupRows(map) {
     <td class="num">${esc(fmtMoney(round2(g.v), S.settings.currency))}</td></tr>`).join('')
     || '<tr><td colspan="3" class="muted">Keine Daten</td></tr>';
 }
+function sourceSummary() {
+  const cur = S.settings.currency;
+  return `TCGplayer-Preis (US), gewählt: ${PT_LABEL[S.ui.priceType]} (fehlt er, Ersatz Markt → Mittel → Tiefst; je Eintrag gespeichert)${cur === 'USD' ? '' : ', umgerechnet'}, Stand ${fmtDate(S.data && S.data.prices ? S.data.prices.priceDate : '')}`;
+}
 function renderColl() {
   const cur = S.settings.currency;
   const sm = summarize(S.scans);
   $('#totals').innerHTML = `
     <div class="stat"><div class="big num">${sm.count}</div><div class="lbl">Karten gesamt (${S.scans.length} Einträge)</div></div>
     <div class="stat"><div class="big num">${esc(fmtMoney(sm.total, cur))}</div><div class="lbl">Gesamtwert in ${esc(cur)}</div></div>
-    <div class="stat wide"><div class="lbl">Preisart: ${esc(PT_LABEL[S.ui.priceType])}. Quelle: ${esc(priceLabel(S.ui.priceType, cur, S.data && S.data.prices ? S.data.prices.priceDate : ''))}.${sm.noPrice ? ` ${sm.noPrice} Karte(n) ohne Preis, nicht gezählt.` : ''}</div></div>`;
+    <div class="stat wide"><div class="lbl">Quelle: ${esc(sourceSummary())}.${sm.noPrice ? ` ${sm.noPrice} Karte(n) ohne Preis, nicht gezählt.` : ''}</div></div>`;
   $('#tSet').innerHTML = groupRows(sm.bySet);
   $('#tRar').innerHTML = groupRows(sm.byRar);
-  $('#top10').innerHTML = sm.priced.slice(0, 10).map(({ r, unit }) => `<li>${esc(r.name)} <span class="muted">${esc(r.set)} · #${esc(r.number)}${r.foil ? ' · Foil' : ''}</span> – <strong>${esc(fmtMoney(unit, cur))}</strong></li>`).join('')
+  $('#top10').innerHTML = sm.priced.slice(0, 10).map(({ r, unit }) => `<li>${esc(r.name)} <span class="muted">${esc(metaLine(setName(r.set, r.setCode), numPart(r.number), r.foil ? 'Foil' : ''))}</span> – <strong>${esc(fmtMoney(unit, cur))}</strong></li>`).join('')
     || '<li class="muted">Noch keine bepreisten Karten.</li>';
   $('#scanList').innerHTML = S.scans.map((r) => itemHtml(r, true)).join('')
     || '<li class="muted">Noch keine Scans. Erfasse Karten im Tab „Scannen“ oder über die Suche.</li>';
@@ -780,7 +842,7 @@ function makeCsv(list) {
     const comma = EURO_COMMA.has(r.currency);
     const total = typeof r.price === 'number' ? csvNum(r.price * (r.qty || 1), comma) : '';
     lines.push([
-      r.id, r.ts, r.name, r.set, r.setCode, r.number, r.rarity, r.type, r.cardClass, r.faction, r.cost, r.atk, r.health,
+      r.id, r.ts, r.name, r.set, r.setCode, r.number, rarityName(r.rarity), r.type, r.cardClass, r.faction, r.cost, r.atk, r.health,
       r.foil ? 'ja' : 'nein', r.condition, r.qty, csvNum(r.priceUsd, comma), csvNum(r.price, comma), r.currency,
       PT_LABEL[r.priceType] || r.priceType, r.priceDate, r.source, r.url, r.imageUrl, r.ocrConfidence, total,
     ].map(csvCell).join(';'));
@@ -801,7 +863,7 @@ function makeReport() {
     `Gesamtwert: ${fmtMoney(sm.total, cur)}`,
   ];
   if (sm.noPrice) L.push(`Ohne Preis: ${sm.noPrice} Karte(n), nicht gezählt`);
-  L.push(`Preisquelle: ${priceLabel(S.ui.priceType, cur, S.data && S.data.prices ? S.data.prices.priceDate : '')}`, '');
+  L.push(`Preisquelle: ${sourceSummary()}`, '');
   const block = (title, map) => {
     L.push(title);
     for (const g of [...map.values()].sort((a, b) => b.v - a.v)) L.push(`  ${g.label}: ${g.q} Stk., ${fmtMoney(round2(g.v), cur)}`);
@@ -810,7 +872,7 @@ function makeReport() {
   block('Pro Set:', sm.bySet);
   block('Pro Seltenheit:', sm.byRar);
   L.push('Top 10 teuerste (Einzelpreis):');
-  sm.priced.slice(0, 10).forEach(({ r, unit }, i) => L.push(`  ${i + 1}. ${r.name} (${r.set} #${r.number}${r.foil ? ', Foil' : ''}) – ${fmtMoney(unit, cur)}`));
+  sm.priced.slice(0, 10).forEach(({ r, unit }, i) => L.push(`  ${i + 1}. ${r.name} (${metaLine(setName(r.set, r.setCode), numPart(r.number), r.foil ? 'Foil' : '')}) – ${fmtMoney(unit, cur)}`));
   return L.join('\n') + '\n';
 }
 function deliver(blob, name) {
@@ -850,13 +912,13 @@ function itemHtml(r, coll) {
     ${img ? `<img class="thumb" src="${esc(img)}" alt="" loading="lazy">` : '<div class="thumb" aria-hidden="true"></div>'}
     <div>
       <div class="name">${esc(r.name)}</div>
-      <div class="sub">${esc(r.set)} · #${esc(r.number)} · ${esc(r.rarity)}${r.foil ? ' · Foil' : ''} · ${esc(r.condition)}</div>
+      <div class="sub">${esc(metaLine(setName(r.set, r.setCode), numPart(r.number), rarityName(r.rarity), r.foil ? 'Foil' : '', r.condition))}</div>
       ${coll
         ? `<div class="qty"><button class="btn sm" type="button" data-act="dec" data-id="${r.id}" aria-label="Menge verringern">&minus;</button><output aria-label="Menge">${r.qty}</output><button class="btn sm" type="button" data-act="inc" data-id="${r.id}" aria-label="Menge erhöhen">+</button></div>`
         : `<div class="sub">Menge ${r.qty}</div>`}
     </div>
     <div class="amt ${typeof r.price === 'number' ? '' : 'none'}">${priceShort(r)}
-      ${typeof r.price === 'number' ? '<div class="sub">je Karte</div>' : ''}
+      ${typeof r.price === 'number' ? `<div class="sub">je Karte${r.priceType && r.priceType !== 'market' ? ' · ' + esc(PT_LABEL[r.priceType] || r.priceType) : ''}</div>` : ''}
       ${coll ? `<div><button class="btn danger del" type="button" data-act="del" data-id="${r.id}">Löschen</button></div>` : ''}
     </div>
   </li>`;
@@ -866,13 +928,14 @@ function renderScan() {
   const rec = S.scans.find((r) => r.id === S.lastId);
   if (!rec) { el.hidden = true; el.innerHTML = ''; return; }
   const img = safeUrl(rec.imageUrl);
-  const pi = { value: typeof rec.price === 'number' ? rec.price : null, cur: rec.currency, pt: rec.priceType, date: rec.priceDate, note: rec.priceUsd == null ? 'Keine Preisdaten für dieses Produkt' : 'Kein Umrechnungskurs' };
+  const wanted = S.lastWanted && S.lastWanted.id === rec.id ? S.lastWanted.wanted : rec.priceType;
+  const pi = { value: typeof rec.price === 'number' ? rec.price : null, cur: rec.currency, pt: rec.priceType, wanted, date: rec.priceDate, note: rec.priceUsd == null ? 'Keine Preisdaten für dieses Produkt' : 'Kein Umrechnungskurs' };
   el.hidden = false;
   el.innerHTML = `
     ${img ? `<img src="${esc(img)}" alt="" loading="lazy">` : '<div class="thumb" aria-hidden="true"></div>'}
     <div>
       <h3>${esc(rec.name)}</h3>
-      <div class="sub">${esc(rec.set)} · #${esc(rec.number)} · ${esc(rec.rarity)}</div>
+      <div class="sub">${esc(metaLine(setName(rec.set, rec.setCode), numPart(rec.number), rarityName(rec.rarity)))}</div>
       <div>${rec.foil ? '<span class="badge">Foil</span>' : ''}<span class="badge">${esc(rec.condition)}</span><span class="badge">Menge ${rec.qty}</span></div>
       ${priceBlockHtml(pi)}
     </div>
@@ -886,7 +949,12 @@ function renderScanInfo() {
   if (!S.data) { setInfo('Keine Kartendaten geladen.'); return; }
   const n = S.data.cards.cards ? S.data.cards.cards.length : 0;
   const date = (S.data.prices && S.data.prices.priceDate) || S.data.meta.priceDate;
-  setInfo(`${n} Karten · Preise Stand ${fmtDate(date)} · Währung ${S.settings.currency} · Abgleich gegen englische Namen`);
+  setInfo(`${n} Karten · Preise Stand ${fmtDate(date)} · Währung ${S.settings.currency}${S.setFilter ? ' · Set-Filter: ' + S.setFilter : ''} · Abgleich gegen englische Namen`);
+}
+function renderSetFilter() {
+  const sel = $('#setFilter');
+  sel.innerHTML = '<option value="">Alle Sets</option>' + (S.idx ? S.idx.sets : []).map((x) => `<option>${esc(x)}</option>`).join('');
+  sel.value = S.setFilter;
 }
 function setInfo(t) { $('#dataInfo').textContent = t; }
 function renderEspInfo() {
@@ -920,30 +988,31 @@ function runSearch() {
   const q = $('#q').value;
   const info = $('#searchInfo'), list = $('#results');
   if (!S.idx) { info.textContent = 'Kartendaten werden geladen …'; list.innerHTML = ''; return; }
-  const toks = norm(q).split(' ').filter(Boolean).map((t) => (/^\d+$/.test(t) ? String(parseInt(t, 10)) : t));
+  const toks = norm(q).split(' ').filter(Boolean);
   if (!toks.length) {
     info.textContent = q.trim() ? 'Bitte Buchstaben oder Zahlen eingeben.' : 'Tippe einen Kartennamen ein.';
     list.innerHTML = ''; S.res = [];
     return;
   }
-  const { cards, names, nums } = S.idx;
+  const { cards, names } = S.idx, flt = S.setFilter;
   const out = [];
   for (let i = 0; i < names.length && out.length < 40; i++) {
+    if (flt && cards[i].s !== flt) continue;
     const nm = names[i];
-    if (toks.every((t) => nm.includes(t) || (/^\d+$/.test(t) && String(nums[i]) === t))) out.push({ card: cards[i], score: 1 });
+    if (toks.every((t) => nm.includes(t))) out.push({ card: cards[i], score: 1 });
   }
   let fuzzy = false;
   if (out.length < 3) {
-    for (const r of matchName(q).ranked) if (!out.some((o) => o.card === r.card)) { out.push(r); fuzzy = true; }
+    for (const r of matchName(q).ranked) for (const card of r.cards) if (!out.some((o) => o.card === card)) { out.push({ card, score: r.score }); fuzzy = true; }
   }
   S.res = out.slice(0, 40);
-  info.textContent = S.res.length ? `${S.res.length} Treffer${fuzzy ? ' (inkl. unscharfer Treffer)' : ''}` : 'Keine Treffer.';
+  info.textContent = (S.res.length ? `${S.res.length} Treffer${fuzzy ? ' (inkl. unscharfer Treffer)' : ''}` : 'Keine Treffer.') + (flt ? ` · nur Set „${flt}“` : '');
   list.innerHTML = S.res.map((r, i) => {
     const img = safeUrl(r.card.img);
     const pi = priceInfo(r.card, S.ui.foil);
     return `<li><button class="row-btn" type="button" data-ridx="${i}">
       ${img ? `<img class="thumb" src="${esc(img)}" alt="" loading="lazy">` : '<div class="thumb" aria-hidden="true"></div>'}
-      <div><div class="name">${esc(r.card.n)}</div><div class="sub">${esc(r.card.s)} · #${esc(r.card.num)} · ${esc(r.card.r)}</div></div>
+      <div><div class="name">${esc(r.card.n)}</div><div class="sub">${esc(metaLine(setName(r.card.s, r.card.sc), numPart(r.card.num), rarityName(r.card.r)))}</div></div>
       <div class="amt ${pi.value == null ? 'none' : ''}">${pi.value == null ? 'kein Preis' : esc(fmtMoney(pi.value, pi.cur))}</div>
     </button></li>`;
   }).join('');
@@ -954,7 +1023,7 @@ function renderDlgBody() {
   const foil = $('#dlgFoil').checked;
   const pi = priceInfo(card, foil);
   const extra = pi.single ? `<div class="src">Für dieses Produkt gibt es nur den Druck „${esc(pi.sub)}“; der Preis gilt dafür.</div>` : '';
-  $('#dlgBody').innerHTML = `<div class="sub">${esc(card.s)} · #${esc(card.num)} · ${esc(card.r)} · ${esc(card.t || '')}</div>
+  $('#dlgBody').innerHTML = `<div class="sub">${esc(metaLine(setName(card.s, card.sc), numPart(card.num), rarityName(card.r), card.t))}</div>
     ${priceBlockHtml(pi)}${extra}`;
 }
 function openDetail(card) {
@@ -1051,8 +1120,8 @@ function bindUi() {
     const r = S.sugg[Number(b.dataset.si)];
     hideSuggest();
     if (!r) return;
-    S.locked = r.card.p; S.others = 0; S.streak = 0; S.streakPid = null;
-    const rec = await captureCard(r.card, { ocr: null });
+    S.locked = baseKey(r.card); S.others = 0; S.streak = 0; S.streakPid = null;
+    const rec = await captureCard(r.card, { ocr: null, number: S.suggNum || null });
     if (!rec) S.locked = null;
   });
   document.addEventListener('click', async (e) => {
@@ -1064,6 +1133,12 @@ function bindUi() {
     else if (act === 'inc' && rec) setQty(id, rec.qty + 1);
     else if (act === 'dec' && rec) setQty(id, rec.qty - 1);
     else if (act === 'del') deleteScan(id);
+  });
+  $('#setFilter').addEventListener('change', (e) => {
+    S.setFilter = e.target.value; lsSet(LS_FLT, S.setFilter);
+    S.locked = null; S.streak = 0; S.streakPid = null; hideSuggest();
+    renderScanInfo();
+    if ($('#q').value) runSearch();
   });
   $('#q').addEventListener('input', () => { clearTimeout(S.searchTmr); S.searchTmr = setTimeout(runSearch, 120); });
   $('#results').addEventListener('click', (e) => {
@@ -1122,16 +1197,14 @@ const round3 = (v) => Math.round(v * 1000) / 1000;
 const bootP = boot();
 window.__wow = {
   ready: bootP,
-  testMatch(nameText, numText = '') {
-    const m = matchName(nameText, numText);
-    return {
-      top: m.ranked[0] ? { name: m.ranked[0].card.n, pid: m.ranked[0].card.p, score: round3(m.ranked[0].score) } : null,
-      ranked: m.ranked.map((r) => ({ name: r.card.n, pid: r.card.p, num: r.card.num, score: round3(r.score) })),
-      ms: round3(m.ms),
-    };
+  testMatch(nameText) {
+    const m = matchName(nameText);
+    const out = (r) => ({ base: r.base, name: r.card.n, pid: r.card.p, score: round3(r.score), printings: r.cards.map((c) => c.p) });
+    return { top: m.ranked[0] ? out(m.ranked[0]) : null, ranked: m.ranked.map(out), ms: round3(m.ms) };
   },
   // Führt einen OCR-Frame-Auswertungsschritt aus (ohne Kamera), für Tests der Stabilitätsregel.
-  frame(nameText, numText = '', conf = 80) { return onFrame(matchName(nameText, numText), nameText, numText, conf); },
+  frame(nameText, numText = '', conf = 80) { return onFrame(matchName(nameText), nameText, parseNum(numText), conf); },
+  setFilter(v) { const sel = $('#setFilter'); sel.value = v; sel.dispatchEvent(new Event('change')); },
   priceInfo(pid, foil, pt, cur) {
     const card = S.idx && S.idx.cards.find((c) => c.p === pid);
     return card ? priceInfo(card, foil, pt, cur) : null;
@@ -1148,6 +1221,7 @@ window.__wow = {
     return apiMaxInFlight;
   },
   subKey(pid, foil) { const c = S.idx && S.idx.cards.find((x) => x.p === pid); const i = c ? priceInfo(c, foil) : null; return i ? { sub: i.sub, isFoil: i.isFoil, value: i.value } : null; },
+  rarityName,
   csv: () => makeCsv(S.scans),
   json: () => makeJson(S.scans),
   report: () => makeReport(),
