@@ -169,6 +169,27 @@ function expectCorners(name, img, quad, w = W, h = H) {
   const q = cardQuad(120, 160, 150);
   expectCorners('(c) dunkler Hintergrund 70, Schachbrett-Motiv', scene([{ quad: q, luma: checker }], 'dark'), q);
 }
+// Galeriefoto (wie App findPhotoCard): kleine, gedrehte Karte (etwa 40 % der Bildhöhe, Fläche ca. 8,5 %), minArea 0,08.
+// Zuerst das ganze Bild, dann der mittlere 70-%-Ausschnitt. Auf dem ganzen Bild liegt der Score bei solchen Karten
+// knapp unter dem Mindestwert, deshalb der zweite Durchlauf.
+{
+  const GW = 360, GH = 270, q = cardQuad(180, 135, 77, 6);
+  check('Galerie: kleine gedrehte Karte, ganzes Bild oder mittlerer Ausschnitt, minArea 0,08: Ecken ≤ 2 px', () => {
+    const img = scene([{ quad: q }], 'mid', 7, GW, GH);
+    const opts = { minArea: 0.08 };
+    let r = CD.detectCard(img, GW, GH, opts), ox = 0, oy = 0;
+    if (!r) {
+      ox = Math.round(GW * 0.15); oy = Math.round(GH * 0.15);
+      const cw = Math.round(GW * 0.7), ch = Math.round(GH * 0.7), part = new Uint8Array(cw * ch);
+      for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) part[y * cw + x] = img[(oy + y) * GW + ox + x];
+      r = CD.detectCard(part, cw, ch, opts);
+      if (r) r = { ...r, corners: r.corners.map(([x, y]) => [x + ox, y + oy]) };
+    }
+    assert.ok(r, 'keine Karte erkannt');
+    const e = maxErr(r.corners, q);
+    assert.ok(e <= 2, `größte Abweichung ${e.toFixed(2)} px`);
+  });
+}
 // (d) Teppich-Textur mit Rauschen ±30 bleibt erkennbar
 {
   const q = cardQuad(120, 160, 150);

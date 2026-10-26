@@ -108,6 +108,35 @@ Basis ändert, wird der Schlüssel auf `wowscan.calib2` umgestellt (alte Offsets
 Ist `cards.json` noch Version 1 (keine Nummern), steht im Status statt „Set+Nummer“:
 „Set+Nummer noch nicht verfügbar (Kartendatenbank fehlt)“. Ohne `hashes.json` wie bisher „ohne Bild“.
 
+## Foto aus der Galerie und Blitz
+
+### Foto aus der Galerie
+
+- Button „Foto aus Galerie“ im Scan-Tab neben „Foto auswerten“. Er funktioniert auch ohne Kamera.
+- Dahinter ein verstecktes `<input type="file" accept="image/*">` ohne `capture`-Attribut, damit iOS und Android die
+  Galerie anbieten.
+- Laden mit `createImageBitmap(file, { imageOrientation: 'from-image' })`. Schlägt das fehl, verwendet die App
+  `Image` mit einer Object-URL. Die lange Seite wird auf höchstens 2000 px verkleinert.
+- Kartenrand suchen (`findPhotoCard`): Graustufen auf ca. 360 px lange Seite, `detectCard` mit `minArea` 0,08.
+  1. ganzes Bild. Liegen alle gefundenen Ecken bis 4 % am Bildrand und hat das Bild Kartenformat, ist das ganze Bild
+     die Karte (ein zugeschnittenes Kartenbild hat keinen äußeren Rand, den der Detektor finden könnte),
+  2. kein Treffer: mittlerer 70-%-Ausschnitt,
+  3. kein Treffer, aber das Bild hat ungefähr Kartenformat (|Breite/Höhe − 63/88| ≤ 0,08): das ganze Bild ist die Karte.
+  Sonst die Meldung „Kartenrand im Foto nicht gefunden. Bitte die Karte formatfüllend und gerade fotografieren.“
+- Danach derselbe Weg wie beim Standbild: Entzerren auf 800×1116 (OCR) und 400×558 (Bildabgleich), Schärfe nur
+  anzeigen (Galeriefotos werden nicht wegen Unschärfe verworfen), `evalCard`, `decide`. Also erfassen oder Vorschläge.
+- Läuft der Live-Scan, hält das Foto ihn über `S.busy` an und wartet auf die laufende Auswertung. Danach bleibt die
+  Live-Erkennung für die Karte gesperrt, solange sie im Kamerabild liegt. Sonst würde sie dieselbe Karte sofort
+  erneut erfassen. Ist die Kamera aus, bleibt keine Sperre zurück.
+- Die Debug-Ansicht zeigt wie beim Standbild die entzerrte Karte und die Rohtexte.
+
+### Blitz
+
+- Nach `getUserMedia` prüft die App `track.getCapabilities()`. Nur wenn `torch` gemeldet wird, erscheint der Schalter
+  „Blitz“ (`aria-pressed`). Er schaltet mit `applyConstraints({ advanced: [{ torch }] })`. Ein Fehler erscheint als Meldung.
+- Bei „Scan stoppen“ geht die Lampe aus und der Schalter verschwindet.
+- Browser ohne Lampensteuerung (nach Kenntnisstand iPhone-Safari) zeigen keinen Schalter und keine Fehlermeldung.
+
 ## Tests
 
 - `webapp/dev/carddetect_test.js` (Node, 17 Prüfungen): synthetische Bilder (Hintergrund mit Rauschen und Textur,
@@ -124,6 +153,18 @@ Ist `cards.json` noch Version 1 (keine Nummern), steht im Status statt „Set+Nu
   Ziel: unter 15 ms.
 - Randprüfung (nicht in der Testdatei, nur Parameterlauf): Nachbarlücke 5 % → 1,00 px, 10 % → 0,81 px, 15 % → 0,70 px. Teppich-Seeds
   1–6 → 0,67 bis 0,93 px. Schachbrett-Verschiebung 0–2 px → 0,59 bis 0,72 px.
+- Galerie (`carddetect_test.js`): kleine, gedrehte Karte (etwa 40 % der Bildhöhe, Fläche ca. 8,5 %) auf glattem
+  Hintergrund mit `minArea` 0,08. Zuerst das ganze Bild, dann der mittlere Ausschnitt. Ecken ≤ 2 px.
+- E2E Galerie: Upload über `setInputFiles` ohne Kamera und mit Kamera (`camera-unknown.y4m`), Erfassung von
+  `photo-card.jpg` (Karte 900003). Ohne Kartenrand (`photo-nocard.jpg`) erscheint die Meldung, nichts wird erfasst.
+  Eine zugeschnittene Karte (`img/900003.png`) wird als ganze Karte erfasst. `900001` ist nicht geeignet, denn zu
+  seiner Illustration gibt es einen Nachdruck (900016). Der Abgleich ist dann mehrdeutig, und die App bietet Vorschläge an. Bei laufender Kamera wird die Karte
+  nur einmal erfasst.
+- E2E Blitz: Im Fake-Device bleibt der Schalter versteckt. Mit einem Init-Skript, das `getCapabilities` →
+  `{ torch: true }` und `applyConstraints` als Spy setzt, erscheint er. Ein Klick ruft `torch: true` auf, der
+  nächste `torch: false`. „Scan stoppen“ schaltet aus und versteckt den Schalter.
+- Testbilder: `make_sample_art.py` erzeugt `sample-data/photo-card.jpg` (1600×1200, Karte ca. 35 % der Bildhöhe,
+  6° gedreht, Holztisch, Nachbarkarte am rechten Rand) und `photo-nocard.jpg` (nur Holz).
 - E2E: Der Fake-Kamerastream (`camera.y4m`) zeigt eine Sample-Karte. Sie muss erkannt, als Polygon
   angezeigt und über den Standbild-Pfad erfasst werden. Zusätzlich wird ein y4m mit kleinerer,
   versetzter und leicht gedrehter Karte erzeugt (`make_sample_art.py` erweitern), und auch diese
@@ -185,6 +226,13 @@ Offen:
 - Die Schwelle nach Spezifikation (80. Perzentil) bleibt für die Hauptsuche. Auf Bildern mit sehr unruhigem Kunstfeld
   kann ein Rand trotzdem fehlen, wenn er nicht im Verfeinerungsschritt liegt. Die Verfeinerung nutzt nur Kandidaten
   innerhalb 7 % der Kartenbreite bzw. -höhe vom inneren Rand.
-- Die gzip-Gesamtgröße liegt bei 44,7 KB (44.662 Byte). Das liegt unter den 45 KB, aber über dem 40-KB-Richtwert
-  in `tools/embed_web.py`. Der Richtwert ist unverändert, deshalb meldet das Skript eine Warnung.
+- Die gzip-Gesamtgröße liegt bei 46,6 KB (46.550 Byte). Das liegt über dem 45-KB-Ziel und über dem 40-KB-Richtwert
+  in `tools/embed_web.py`. Der Richtwert ist unverändert, deshalb meldet das Skript eine Warnung. Die Größe ist ein
+  Punkt für die nächste Runde.
 - Echte Fotos sind nicht getestet. Die Prüfungen laufen mit synthetischen Szenen.
+- Galerie: Auf 360 px Breite liegt der Score einer kleinen Karte nahe am Mindestwert. Deshalb gibt es den zweiten
+  Durchlauf mit dem mittleren Ausschnitt. Bei per Pixel verrauschtem Teppich (±30 bei 360 px) fand der Detektor die
+  kleine Karte nur ungenau (4 bis 7 px) oder gar nicht. Echte Fotos sind dort anders, denn sie werden von 1600 px
+  herunterskaliert. Das ist nicht gemessen.
+- Blitz: Die Unterstützung auf Android-Chrome ist nicht am Gerät geprüft, nur mit dem Spy. Auf iPhone-Safari fehlt
+  die Lampensteuerung nach Kenntnisstand, das ist nicht geprüft.

@@ -32,7 +32,11 @@
       <div id="live" class="live" aria-live="polite"></div>
     </div>
 
-    <button id="btnShot" class="btn big" type="button" disabled>Foto auswerten</button>
+    <div class="actions">
+      <button id="btnShot" class="btn big" type="button" disabled>Foto auswerten</button>
+      <button id="btnGallery" class="btn big" type="button">Foto aus Galerie</button>
+      <input type="file" id="galFile" accept="image/*" hidden>
+    </div>
 
     <div id="dbg" class="dbg" hidden>
       <p class="meta">Debug: entzerrte Karte, Illustration (Bildabgleich) und OCR-Bereiche mit Rohtext</p>
@@ -43,6 +47,7 @@
     </div>
 
     <button id="btnScan" class="btn primary big" type="button" aria-pressed="false">Scan starten</button>
+    <button id="btnTorch" class="btn big" type="button" aria-pressed="false" hidden>Blitz</button>
     <label class="switch"><input type="checkbox" id="scanFoil"><span>Foil erfassen</span></label>
     <label class="field"><span>Set-Filter (Abgleich und Suche nur in diesem Set)</span>
       <select id="setFilter"><option value="">Alle Sets</option></select></label>

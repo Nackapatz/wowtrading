@@ -941,9 +941,13 @@ function takeShot(corners) {
   const vid = $('#video'), vw = vid.videoWidth, vh = vid.videoHeight;
   if (!cvFull) cvFull = document.createElement('canvas');
   cvFull.width = vw; cvFull.height = vh;
-  const fctx = cvFull.getContext('2d', { willReadFrequently: true });
-  fctx.drawImage(vid, 0, 0, vw, vh);
-  const px = self.WowCardDetect.warpCard(fctx.getImageData(0, 0, vw, vh).data, vw, vh, corners, HI_W, HI_H, 4);
+  cvFull.getContext('2d', { willReadFrequently: true }).drawImage(vid, 0, 0, vw, vh);
+  return warpFromCanvas(cvFull, corners);
+}
+// Entzerrt die Karte aus einem Bild (Video-Standbild oder Galeriefoto) wie beim Standbild
+function warpFromCanvas(src, corners) {
+  const vw = src.width, vh = src.height;
+  const px = self.WowCardDetect.warpCard(src.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, vw, vh).data, vw, vh, corners, HI_W, HI_H, 4);
   if (!px) return null;
   const hi = hiCanvas();
   hi.getContext('2d').putImageData(new ImageData(px, HI_W, HI_H), 0, 0);
@@ -951,6 +955,110 @@ function takeShot(corners) {
   cx.drawImage(hi, 0, 0, CARD_W, CARD_H);
   const sharp = self.WowCardDetect.sharpness(grayOf(cx.getImageData(0, 0, CARD_W, CARD_H).data, CARD_W * CARD_H), CARD_W, CARD_H);
   return { cv, hi, sharp };
+}
+/* Foto aus der Galerie (docs/CARD_DETECT.md, Abschnitt „Foto aus der Galerie“). Funktioniert auch ohne Kamera. */
+const PHOTO_MSG = 'Kartenrand im Foto nicht gefunden. Bitte die Karte formatfüllend und gerade fotografieren.';
+// Bild laden: createImageBitmap mit Ausrichtung aus dem Bild, sonst Image + Object-URL. Länge höchstens 2000 px.
+async function loadPhotoCanvas(file) {
+  let src = null, url = null;
+  try { src = await createImageBitmap(file, { imageOrientation: 'from-image' }); } catch { src = null; }
+  if (!src) { url = URL.createObjectURL(file); src = await loadImage(url); }
+  try {
+    const w0 = src.width || src.naturalWidth, h0 = src.height || src.naturalHeight;
+    const k = Math.min(1, 2000 / Math.max(w0, h0));
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(w0 * k)); cv.height = Math.max(1, Math.round(h0 * k));
+    cv.getContext('2d', { willReadFrequently: true }).drawImage(src, 0, 0, cv.width, cv.height);
+    return cv;
+  } finally {
+    if (src.close) src.close();
+    if (url) URL.revokeObjectURL(url);
+  }
+}
+// Kartenrand im Foto: ganzes Bild (Graustufen auf ca. 360 px), sonst mittlerer 70-%-Ausschnitt, sonst das ganze Bild
+// als Karte, wenn es ungefähr Kartenformat hat. Liefert Ecken in Pixeln des Fotos oder null.
+function findPhotoCard(cv) {
+  const W0 = cv.width, H0 = cv.height, s = Math.min(1, 360 / Math.max(W0, H0));
+  const sw = Math.max(16, Math.round(W0 * s)), sh = Math.max(16, Math.round(H0 * s));
+  const small = document.createElement('canvas');
+  small.width = sw; small.height = sh;
+  small.getContext('2d', { willReadFrequently: true }).drawImage(cv, 0, 0, sw, sh);
+  const area = (x0, y0, w, h) => {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(small, x0, y0, w, h, 0, 0, w, h);
+    const r = self.WowCardDetect.detectCard(grayOf(ctx.getImageData(0, 0, w, h).data, w * h), w, h, { minArea: 0.08 });
+    return r ? r.corners.map(([x, y]) => [(x0 + x) * W0 / sw, (y0 + y) * H0 / sh]) : null;
+  };
+  const WHOLE = [[0, 0], [W0, 0], [W0, H0], [0, H0]];
+  const cardFormat = Math.abs(W0 / H0 - 63 / 88) <= 0.08;
+  // Zugeschnittenes Kartenbild: Der gefundene Rand liegt am Bildrand (bis 4 %), dann ist das ganze Bild die Karte
+  const atEdge = (p) => (p[0] <= 0.04 * W0 || p[0] >= 0.96 * W0) && (p[1] <= 0.04 * H0 || p[1] >= 0.96 * H0);
+  const full = area(0, 0, sw, sh);
+  if (full) return cardFormat && full.every(atEdge) ? WHOLE : full;
+  const mid = area(Math.round(sw * 0.15), Math.round(sh * 0.15), Math.round(sw * 0.7), Math.round(sh * 0.7));
+  if (mid) return mid;
+  if (cardFormat) return WHOLE;
+  return null;
+}
+// Auf den Live-Scan warten, bis er gerade nichts auswertet, dann selbst sperren
+async function acquireBusy() {
+  while (S.busy) await new Promise((r) => setTimeout(r, 30));
+  S.busy = true;
+}
+async function scanPhoto(file) {
+  await acquireBusy();
+  try {
+    setLive('Foto wird ausgewertet …');
+    const cv = await loadPhotoCanvas(file);
+    const corners = findPhotoCard(cv);
+    if (!corners) { toast(PHOTO_MSG, 'err'); setLive(PHOTO_MSG); return; }
+    const s1 = warpFromCanvas(cv, corners);
+    if (!s1) { toast('Karte konnte nicht entzerrt werden.', 'err'); setLive(''); return; }
+    S.dbgShot = { sharp: s1.sharp };   // nur anzeigen, Galeriefotos werden nicht wegen Unschärfe verworfen
+    if (S.cal.debug) drawCardDebug(s1.cv);
+    const e = await evalCard(s1.cv, s1.hi, null);
+    S.dbg = { raw: e.raw, m: e.m };
+    renderDbg();
+    const ctx = {
+      nameDe: e.m.de || null, number: e.m.st ? `${e.m.st.num}/${e.m.st.tot}` : null,
+      readName: async () => { const t = cleanDe(await ocrRegion(s1.hi, 'name')); return t || null; },
+    };
+    const st = await decide(e.m, ctx);
+    if (st === 'captured') setLive(`Erfasst: ${e.m.ranked[0].card.n}. Nächstes Foto oder Karte auflegen.`);
+    else if (st === 'none') setLive('Nicht erkannt. Nächstes Foto wählen.');
+    // Sperre: Live-Erkennung erfasst dieselbe Karte nicht sofort erneut. Sie gilt, solange die Karte im Kamerabild liegt.
+    const keep = st === 'captured' ? e.m.ranked[0].card.k : '?';
+    if (S.scanning && S.cd.last) { S.locked = keep; S.miss = 0; S.cd.lockC = S.cd.last; S.cd.state = 'wait-remove'; }
+    else { S.locked = null; S.miss = 0; }
+  } catch (err) {
+    toast(`Foto konnte nicht ausgewertet werden: ${err.message}`, 'err');
+  } finally { S.busy = false; }
+}
+
+/* Blitz: nur wenn der Browser torch meldet (Android Chrome). iPhone-Safari: Button bleibt versteckt. */
+function setupTorch(stream) {
+  let track = null, caps = null;
+  try { track = stream.getVideoTracks()[0] || null; caps = track && track.getCapabilities ? track.getCapabilities() : null; } catch { caps = null; }
+  S.torch = false;
+  S.torchTrack = caps && caps.torch ? track : null;
+  $('#btnTorch').hidden = !S.torchTrack;
+  $('#btnTorch').setAttribute('aria-pressed', 'false');
+}
+async function setTorch(on) {
+  const t = S.torchTrack;
+  if (!t) return;
+  try { await t.applyConstraints({ advanced: [{ torch: on }] }); S.torch = on; }
+  catch (e) { S.torch = false; toast(`Blitz nicht möglich (${(e && e.message) || e}).`, 'err'); }
+  $('#btnTorch').setAttribute('aria-pressed', String(S.torch));
+}
+function torchOff() {
+  const t = S.torchTrack;
+  if (t && S.torch) { try { t.applyConstraints({ advanced: [{ torch: false }] }).catch(() => {}); } catch { /* ignorieren */ } }
+  S.torch = false; S.torchTrack = null;
+  $('#btnTorch').hidden = true;
+  $('#btnTorch').setAttribute('aria-pressed', 'false');
 }
 function unlock() {
   S.locked = null; S.miss = 0;
@@ -1117,6 +1225,7 @@ async function startScan() {
     });
   } catch (e) { camMsg(camErrText(e), true); return; }
   S.stream = stream;
+  setupTorch(stream);
   video.srcObject = stream;
   video.hidden = false;
   camMsg('');
@@ -1159,6 +1268,7 @@ function stopScan() {
   S.scanning = false;
   S.loopId++;
   S.locked = null; S.miss = 0; S.cd = newCd();
+  torchOff();
   if (S.stream) S.stream.getTracks().forEach((t) => t.stop());
   S.stream = null;
   const v = $('#video');
@@ -1597,6 +1707,9 @@ function bindUi() {
   $$('.tab').forEach((b) => b.addEventListener('click', () => showView(b.dataset.view)));
   $('#btnScan').addEventListener('click', () => (S.scanning ? stopScan() : startScan()));
   $('#btnShot').addEventListener('click', shotNow);
+  $('#btnGallery').addEventListener('click', () => $('#galFile').click());
+  $('#galFile').addEventListener('change', (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) scanPhoto(f); });
+  $('#btnTorch').addEventListener('click', () => setTorch(!S.torch));
   $('#scanFoil').addEventListener('change', (e) => { S.ui.foil = e.target.checked; lsSet(LS_UI, S.ui); });
   $('#last').addEventListener('click', (e) => { const b = e.target.closest('[data-var]'); if (b) switchVariant(b.dataset.var); });
   $('#chips').addEventListener('click', async (e) => {

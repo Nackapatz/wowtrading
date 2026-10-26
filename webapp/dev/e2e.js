@@ -926,6 +926,120 @@ async function main() {
       assert.deepEqual(p.errors, []);
     } finally { await b4.close(); }
   });
+  // Galerie-Foto (Upload über das versteckte Dateifeld): ohne Kamera und mit Kamera
+  const galPath = (f) => path.join(__dirname, 'sample-data', f);
+  const waitCount = async (want, ms) => { const d = Date.now() + ms; while (Date.now() < d && (await scanCount()) !== want) await new Promise((r) => setTimeout(r, 250)); return scanCount(); };
+  await check('Galerie (Kamera aus): Foto hochladen → Karte erfasst, ohne Kamera', async () => {
+    const b = await chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] });
+    try {
+      const c = await b.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, permissions: ['camera'] });
+      await c.route('https://cdn.jsdelivr.net/**', (r) => r.abort());
+      const p = await openApp(c);
+      await p.evaluate(() => window.__wow.setFilter(''));
+      const before = await scanCount();
+      await p.setInputFiles('#galFile', galPath('photo-card.jpg'));
+      assert.equal(await waitCount(before + 1, 15000), before + 1, 'Foto aus der Galerie nicht erfasst');
+      const rec = await lastRec();
+      assert.equal(rec.productId, 900003, 'falsche Karte: ' + rec.productId);
+      await api('DELETE', `/api/scans?id=${rec.id}`);   // Testdublette wieder entfernen
+      assert.deepEqual(p.errors, []);
+    } finally { await b.close(); }
+  });
+  await check('Galerie (Kamera an, andere Karte im Bild): Foto erfasst, Live-Erkennung erfasst nicht doppelt', async () => {
+    const b = await chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--use-file-for-fake-video-capture=' + galPath('camera-unknown.y4m')] });
+    try {
+      const c = await b.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, permissions: ['camera'] });
+      await c.route('https://cdn.jsdelivr.net/**', (r) => r.abort());
+      const p = await openApp(c);
+      await p.evaluate(() => window.__wow.setFilter(''));
+      await p.click('#btnScan');
+      await p.waitForFunction(() => /Nicht erkannt/.test(document.querySelector('#live').textContent), null, { timeout: 12000 });
+      const before = await scanCount();
+      await p.setInputFiles('#galFile', galPath('photo-card.jpg'));
+      assert.equal(await waitCount(before + 1, 15000), before + 1, 'Foto bei laufender Kamera nicht erfasst');
+      await p.waitForTimeout(2500);
+      assert.equal(await scanCount(), before + 1, 'Live-Erkennung hat dieselbe oder eine andere Karte doppelt erfasst');
+      const rec = await lastRec();
+      assert.equal(rec.productId, 900003);
+      await api('DELETE', `/api/scans?id=${rec.id}`);
+      await p.click('#btnScan');
+      assert.deepEqual(p.errors, []);
+    } finally { await b.close(); }
+  });
+  await check('Galerie (kein Kartenrand): Meldung erscheint, nichts wird erfasst', async () => {
+    const b = await chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] });
+    try {
+      const c = await b.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, permissions: ['camera'] });
+      await c.route('https://cdn.jsdelivr.net/**', (r) => r.abort());
+      const p = await openApp(c);
+      const before = await scanCount();
+      await p.setInputFiles('#galFile', galPath('photo-nocard.jpg'));
+      await p.waitForFunction(() => /Kartenrand im Foto nicht gefunden/.test(document.querySelector('#toast').textContent), null, { timeout: 15000 });
+      await p.waitForTimeout(1000);
+      assert.equal(await scanCount(), before, 'ohne Kartenrand darf nichts erfasst werden');
+      assert.deepEqual(p.errors, []);
+    } finally { await b.close(); }
+  });
+  await check('Galerie (bereits zugeschnittene Karte): ganzes Bild wird als Karte erfasst', async () => {
+    const b = await chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] });
+    try {
+      const c = await b.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, permissions: ['camera'] });
+      await c.route('https://cdn.jsdelivr.net/**', (r) => r.abort());
+      const p = await openApp(c);
+      await p.evaluate(() => window.__wow.setFilter(''));
+      const before = await scanCount();
+      await p.setInputFiles('#galFile', path.join(__dirname, 'sample-data', 'img', '900003.png'));
+      assert.equal(await waitCount(before + 1, 15000), before + 1, 'zugeschnittene Karte nicht erfasst');
+      const rec = await lastRec();
+      assert.equal(rec.productId, 900003, 'falsche Karte: ' + rec.productId);
+      await api('DELETE', `/api/scans?id=${rec.id}`);
+      assert.deepEqual(p.errors, []);
+    } finally { await b.close(); }
+  });
+  // Blitz: nur bei Browsern, die torch melden. Im Fake-Device nicht vorhanden → Button versteckt.
+  await check('Blitz: im Fake-Device ohne Lampe bleibt der Button versteckt', async () => {
+    const b = await chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--use-file-for-fake-video-capture=' + galPath('camera.y4m')] });
+    try {
+      const c = await b.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, permissions: ['camera'] });
+      await c.route('https://cdn.jsdelivr.net/**', (r) => r.abort());
+      const p = await openApp(c);
+      await p.click('#btnScan');
+      await p.waitForFunction(() => document.querySelector('#video').videoWidth > 0, null, { timeout: 8000 });
+      await p.waitForTimeout(500);
+      assert.equal(await p.isHidden('#btnTorch'), true, 'Blitz-Button sichtbar ohne torch-Fähigkeit');
+      assert.deepEqual(p.errors, []);
+      await p.click('#btnScan');
+    } finally { await b.close(); }
+  });
+  await check('Blitz: Toggle ruft torch an und aus, Scan stoppen schaltet aus', async () => {
+    const b = await chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream', '--use-file-for-fake-video-capture=' + galPath('camera.y4m')] });
+    try {
+      const c = await b.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, permissions: ['camera'] });
+      await c.addInitScript(() => {
+        window.__torch = [];
+        const proto = MediaStreamTrack.prototype;
+        proto.getCapabilities = function () { return { torch: true }; };
+        proto.applyConstraints = function (cons) { window.__torch.push(cons); return Promise.resolve(); };
+      });
+      await c.route('https://cdn.jsdelivr.net/**', (r) => r.abort());
+      const p = await openApp(c);
+      await p.click('#btnScan');
+      await p.waitForFunction(() => !document.querySelector('#btnTorch').hidden, null, { timeout: 8000 });
+      const last = () => p.evaluate(() => window.__torch.at(-1));
+      await p.click('#btnTorch');
+      await p.waitForFunction(() => document.querySelector('#btnTorch').getAttribute('aria-pressed') === 'true', null, { timeout: 4000 });
+      assert.deepEqual(await last(), { advanced: [{ torch: true }] }, 'Einschalten');
+      await p.click('#btnTorch');
+      await p.waitForFunction(() => document.querySelector('#btnTorch').getAttribute('aria-pressed') === 'false', null, { timeout: 4000 });
+      assert.deepEqual(await last(), { advanced: [{ torch: false }] }, 'Ausschalten');
+      await p.click('#btnTorch');
+      await p.waitForFunction(() => document.querySelector('#btnTorch').getAttribute('aria-pressed') === 'true', null, { timeout: 4000 });
+      await p.click('#btnScan');   // Scan stoppen
+      assert.deepEqual(await last(), { advanced: [{ torch: false }] }, 'Scan stoppen schaltet die Lampe aus');
+      assert.equal(await p.isHidden('#btnTorch'), true, 'Button nach dem Stoppen versteckt');
+      assert.deepEqual(p.errors, []);
+    } finally { await b.close(); }
+  });
   await check('Standbilder zusammenführen: erster passender Rohtext je Feld, sonst der häufigste', async () => {
     const r = await page.evaluate(() => window.__wow.mergeRaw([
       { strip: 'BETRAYER 15 3/264', cost: '7' }, { strip: 'BETRAYER 163/264', cost: '2', atk: '2', hp: '2' }, { strip: 'BETRAYER 163/264', cost: '2', atk: '9', hp: '2' },
