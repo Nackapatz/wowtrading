@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#120f0a">
+<meta name="description" content="Karten scannen, TCGplayer-Preise umrechnen und Sammlung verwalten.">
+<title>WoW Preis-Scanner</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="gem" aria-hidden="true">&#9670;</span><h1>Preis-Scanner</h1></div>
+  <div id="espPill" class="pill" role="status">ESP prüfen …</div>
+</header>
+
+<div id="banner" class="banners" role="alert" hidden></div>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<main>
+  <!-- ============ Scannen ============ -->
+  <section id="v-scan" class="view" aria-label="Scannen">
+    <p id="dataInfo" class="meta"></p>
+
+    <div id="cam" class="cam">
+      <video id="video" playsinline muted hidden></video>
+      <div id="guide" class="guide" aria-hidden="true" hidden></div>
+      <div id="boxName" class="cal-box" aria-hidden="true" hidden><span>Name</span></div>
+      <div id="boxNum" class="cal-box" aria-hidden="true" hidden><span>Nummer</span></div>
+      <div id="camMsg" class="cam-msg">Kamera aus. Tippe auf „Scan starten“, um die Kartenerkennung zu starten.</div>
+      <div id="live" class="live" aria-live="polite"></div>
+    </div>
+
+    <div id="dbg" class="dbg" hidden>
+      <p class="meta">Debug: Ausschnitte nach Vorverarbeitung (Graustufen, Kontrast)</p>
+      <canvas id="cvName" width="10" height="10" aria-label="Ausschnitt Name"></canvas>
+      <canvas id="cvNum" width="10" height="10" aria-label="Ausschnitt Nummer"></canvas>
+      <pre id="dbgTxt" class="dbg-txt"></pre>
+    </div>
+
+    <button id="btnScan" class="btn primary big" type="button" aria-pressed="false">Scan starten</button>
+    <label class="switch"><input type="checkbox" id="scanFoil"><span>Foil erfassen</span></label>
+
+    <div id="suggest" class="suggest" hidden>
+      <p class="muted">Unsicher erkannt. Tippe die richtige Karte an:</p>
+      <div id="chips" class="chips"></div>
+    </div>
+
+    <article id="last" class="result" aria-label="Zuletzt erfasste Karte" hidden></article>
+
+    <h2 class="h2">Zuletzt erfasst</h2>
+    <ul id="recent" class="list"></ul>
+
+    <p class="hint">Der Abgleich läuft gegen englische Kartennamen. Deutsche Kartenausgaben werden über die Suche gefunden.</p>
+  </section>
+
+  <!-- ============ Suche ============ -->
+  <section id="v-search" class="view" aria-label="Manuelle Suche" hidden>
+    <label class="field">
+      <span>Kartenname oder Nummer</span>
+      <input id="q" type="search" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="z. B. Sample Knight">
+    </label>
+    <p id="searchInfo" class="meta"></p>
+    <ul id="results" class="list"></ul>
+  </section>
+
+  <!-- ============ Sammlung ============ -->
+  <section id="v-coll" class="view" aria-label="Sammlung" hidden>
+    <div class="totals" id="totals"></div>
+
+    <details class="box" id="sumBox" open>
+      <summary>Auswertung</summary>
+      <h3 class="h3">Pro Set</h3>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th scope="col">Set</th><th scope="col">Stk.</th><th scope="col">Wert</th></tr></thead><tbody id="tSet"></tbody></table></div>
+      <h3 class="h3">Pro Seltenheit</h3>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th scope="col">Seltenheit</th><th scope="col">Stk.</th><th scope="col">Wert</th></tr></thead><tbody id="tRar"></tbody></table></div>
+      <h3 class="h3">Top 10 teuerste (Einzelpreis)</h3>
+      <ol id="top10" class="top10"></ol>
+    </details>
+
+    <div class="actions">
+      <button id="btnCsv" class="btn" type="button">CSV</button>
+      <button id="btnJson" class="btn" type="button">JSON</button>
+      <button id="btnTxt" class="btn" type="button">Bericht (Text)</button>
+      <button id="btnShare" class="btn" type="button" hidden>Bericht teilen</button>
+      <button id="btnRefresh" class="btn" type="button">Aktualisieren</button>
+    </div>
+
+    <ul id="scanList" class="list"></ul>
+    <button id="btnClear" class="btn danger" type="button">Alle Scans löschen</button>
+  </section>
+
+  <!-- ============ Einstellungen ============ -->
+  <section id="v-set" class="view" aria-label="Einstellungen" hidden>
+    <form id="setForm" class="form" novalidate>
+      <label class="field"><span>Land</span><select id="setCountry"></select></label>
+      <p class="meta">Währung: <strong id="setCur"></strong> (automatisch aus dem Land)</p>
+
+      <label class="field"><span>Preisart</span>
+        <select id="setPT">
+          <option value="market">Marktpreis</option>
+          <option value="low">Tiefstpreis</option>
+          <option value="mid">Mittelpreis</option>
+        </select>
+      </label>
+
+      <label class="switch"><input type="checkbox" id="setFoil"><span>Foil als Standard</span></label>
+
+      <label class="field"><span>Zustand (nur Information)</span>
+        <select id="setCond">
+          <option value="NM">NM – Near Mint</option>
+          <option value="LP">LP – Lightly Played</option>
+          <option value="MP">MP – Moderately Played</option>
+          <option value="HP">HP – Heavily Played</option>
+        </select>
+      </label>
+
+      <label class="field"><span>Daten-URL (GitHub Pages)</span>
+        <input id="setDataUrl" type="url" inputmode="url" autocomplete="off" autocapitalize="none" spellcheck="false">
+      </label>
+
+      <div class="actions">
+        <button class="btn primary" type="submit">Speichern</button>
+        <button id="btnReloadData" class="btn" type="button">Kartendaten neu laden</button>
+      </div>
+    </form>
+
+    <section class="box cal" aria-labelledby="calH">
+      <h2 id="calH" class="h2">OCR-Kalibrierung</h2>
+      <p class="hint">Die gestrichelten Rahmen im Kamerabild zeigen, wo Name und Sammlernummer gelesen werden. Verschiebe sie mit den Reglern (±10 % der Kartenhöhe), bis sie auf der Karte liegen.</p>
+      <label class="field"><span>Namenszeile: Verschiebung <output id="calNameV">0</output> %</span>
+        <input id="calNameS" type="range" min="-10" max="10" step="1" value="0"></label>
+      <label class="field"><span>Nummer: Verschiebung <output id="calNumV">0</output> %</span>
+        <input id="calNumS" type="range" min="-10" max="10" step="1" value="0"></label>
+      <label class="switch"><input type="checkbox" id="calDbg"><span>Debug-Ansicht unter der Kamera</span></label>
+      <div class="actions"><button id="calReset" class="btn" type="button">Kalibrierung zurücksetzen</button></div>
+    </section>
+
+    <h2 class="h2">Scanner</h2>
+    <dl id="espInfo" class="kv"></dl>
+  </section>
+</main>
+
+<nav class="tabs" aria-label="Hauptnavigation">
+  <button class="tab" type="button" data-view="scan" aria-selected="true">Scannen</button>
+  <button class="tab" type="button" data-view="search" aria-selected="false">Suche</button>
+  <button class="tab" type="button" data-view="coll" aria-selected="false">Sammlung</button>
+  <button class="tab" type="button" data-view="set" aria-selected="false">Einstellungen</button>
+</nav>
+
+<dialog id="dlg" aria-labelledby="dlgTitle">
+  <form method="dialog" class="dlg-inner">
+    <h2 id="dlgTitle" class="h2"></h2>
+    <div id="dlgBody"></div>
+    <label class="switch"><input type="checkbox" id="dlgFoil"><span>Foil</span></label>
+    <label class="field inline"><span>Menge</span>
+      <span class="stepper">
+        <button type="button" class="btn sm" id="dlgMinus" aria-label="Menge verringern">&minus;</button>
+        <input id="dlgQty" type="number" min="1" max="99" value="1" inputmode="numeric">
+        <button type="button" class="btn sm" id="dlgPlus" aria-label="Menge erhöhen">+</button>
+      </span>
+    </label>
+    <label class="field"><span>Zustand</span>
+      <select id="dlgCond"><option>NM</option><option>LP</option><option>MP</option><option>HP</option></select>
+    </label>
+    <div class="actions">
+      <button id="dlgAdd" class="btn primary" type="button">Zur Sammlung hinzufügen</button>
+      <button class="btn" value="cancel" type="submit">Abbrechen</button>
+    </div>
+  </form>
+</dialog>
+
+<noscript><p class="banner err">Diese Seite braucht JavaScript.</p></noscript>
+<script src="app.js"></script>
+</body>
+</html>

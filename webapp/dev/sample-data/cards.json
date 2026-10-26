@@ -1,0 +1,449 @@
+{
+ "generatedAt": "2026-10-26T06:00:00Z",
+ "sample": true,
+ "cards": [
+  {
+   "p": 900001,
+   "n": "Sample Knight of Testing",
+   "g": 24001,
+   "s": "SAMPLE Set Alpha",
+   "sc": "SMA",
+   "num": "001/120",
+   "r": "Rare",
+   "t": "Hero",
+   "x": {
+    "Class": "Sample Warrior",
+    "Faction": "Sample A",
+    "Cost": 4,
+    "ATK": 3,
+    "Health": 5
+   },
+   "img": "https://sample.invalid/img/900001.png",
+   "u": "https://sample.invalid/product/900001"
+  },
+  {
+   "p": 900002,
+   "n": "Sample Ember Warden",
+   "g": 24001,
+   "s": "SAMPLE Set Alpha",
+   "sc": "SMA",
+   "num": "002/120",
+   "r": "Uncommon",
+   "t": "Unit",
+   "x": {
+    "Class": "Sample Mage",
+    "Cost": 2,
+    "ATK": 2,
+    "Health": 3
+   },
+   "img": "https://sample.invalid/img/900002.png",
+   "u": "https://sample.invalid/product/900002"
+  },
+  {
+   "p": 900003,
+   "n": "Sample Frost Oracle",
+   "g": 24001,
+   "s": "SAMPLE Set Alpha",
+   "sc": "SMA",
+   "num": "003/120",
+   "r": "Epic",
+   "t": "Unit",
+   "x": {
+    "Class": "Sample Mage",
+    "Cost": 5,
+    "ATK": 4,
+    "Health": 4
+   },
+   "img": "https://sample.invalid/img/900003.png",
+   "u": "https://sample.invalid/product/900003"
+  },
+  {
+   "p": 900004,
+   "n": "Sample Shadow Scout",
+   "g": 24001,
+   "s": "SAMPLE Set Alpha",
+   "sc": "SMA",
+   "num": "004/120",
+   "r": "Common",
+   "t": "Unit",
+   "x": {
+    "Class": "Sample Rogue",
+    "Cost": 1,
+    "ATK": 1,
+    "Health": 2
+   },
+   "img": "https://sample.invalid/img/900004.png",
+   "u": "https://sample.invalid/product/900004"
+  },
+  {
+   "p": 900005,
+   "n": "Sample Mana Weaver",
+   "g": 24001,
+   "s": "SAMPLE Set Alpha",
+   "sc": "SMA",
+   "num": "005/120",
+   "r": "Rare",
+   "t": "Spell",
+   "x": {
+    "Class": "Sample Mage",
+    "Cost": 3
+   },
+   "img": "https://sample.invalid/img/900005.png",
+   "u": "https://sample.invalid/product/900005"
+  },
+  {
+   "p": 900006,
+   "n": "Sample Gatekeeper",
+   "g": 24001,
+   "s": "SAMPLE Set Alpha",
+   "sc": "SMA",
+   "num": "006/120",
+   "r": "Common",
+   "t": "Unit",
+   "x": {
+    "Class": "Sample Warrior",
+    "Cost": 2,
+    "ATK": 2,
+    "Health": 2
+   },
+   "img": "https://sample.invalid/img/900006.png",
+   "u": "https://sample.invalid/product/900006"
+  },
+  {
+   "p": 900007,
+   "n": "Sample Dawn Priest",
+   "g": 24001,
+   "s": "SAMPLE Set Alpha",
+   "sc": "SMA",
+   "num": "007/120",
+   "r": "Rare",
+   "t": "Unit",
+   "x": {
+    "Class": "Sample Priest",
+    "Cost": 3,
+    "ATK": 2,
+    "Health": 4
+   },
+   "img": "https://sample.invalid/img/900007.png",
+   "u": "https://sample.invalid/product/900007"
+  },
+  {
+   "p": 900008,
+   "n": "Sample Dawn Priestess",
+   "g": 24001,
+   "s": "SAMPLE Set Alpha",
+   "sc": "SMA",
+   "num": "008/120",
+   "r": "Rare",
+   "t": "Unit",
+   "x": {
+    "Class": "Sample Priest",
+    "Cost": 3,
+    "ATK": 3,
+    "Health": 3
+   },
+   "img": "https://sample.invalid/img/900008.png",
+   "u": "https://sample.invalid/product/900008"
+  },
+  {
+   "p": 900009,
+   "n": "Sample Storm Hound",
+   "g": 24001,
+   "s": "SAMPLE Set Alpha",
+   "sc": "SMA",
+   "num": "045/120",
+   "r": "Uncommon",
+   "t": "Unit",
+   "x": {
+    "Class": "Sample Hunter",
+    "Cost": 2,
+    "ATK": 3,
+    "Health": 1
+   },
+   "img": "https://sample.invalid/img/900009.png",
+   "u": "https://sample.invalid/product/900009"
+  },
+  {
+   "p": 900010,
+   "n": "Sample Ancient Golem",
+   "g": 24001,
+   "s": "SAMPLE Set Alpha",
+   "sc": "SMA",
+   "num": "099/120",
+   "r": "Legendary",
+   "t": "Unit",
+   "x": {
+    "Class": "Sample Warrior",
+    "Cost": 8,
+    "ATK": 7,
+    "Health": 9
+   },
+   "img": "https://sample.invalid/img/900010.png",
+   "u": "https://sample.invalid/product/900010"
+  },
+  {
+   "p": 900011,
+   "n": "Sample Ghost Lantern",
+   "g": 24002,
+   "s": "SAMPLE Set Beta",
+   "sc": "SMB",
+   "num": "001/80",
+   "r": "Common",
+   "t": "Item",
+   "x": {
+    "Cost": 1
+   },
+   "img": "https://sample.invalid/img/900011.png",
+   "u": "https://sample.invalid/product/900011"
+  },
+  {
+   "p": 900012,
+   "n": "Sample Iron Maiden",
+   "g": 24002,
+   "s": "SAMPLE Set Beta",
+   "sc": "SMB",
+   "num": "002/80",
+   "r": "Rare",
+   "t": "Unit",
+   "x": {
+    "Class": "Sample Warrior",
+    "Cost": 4,
+    "ATK": 4,
+    "Health": 4
+   },
+   "img": "https://sample.invalid/img/900012.png",
+   "u": "https://sample.invalid/product/900012"
+  },
+  {
+   "p": 900013,
+   "n": "Sample Moon Archer",
+   "g": 24002,
+   "s": "SAMPLE Set Beta",
+   "sc": "SMB",
+   "num": "003/80",
+   "r": "Uncommon",
+   "t": "Unit",
+   "x": {
+    "Class": "Sample Hunter",
+    "Cost": 3,
+    "ATK": 3,
+    "Health": 2
+   },
+   "img": "https://sample.invalid/img/900013.png",
+   "u": "https://sample.invalid/product/900013"
+  },
+  {
+   "p": 900014,
+   "n": "Sample Sun Hermit",
+   "g": 24002,
+   "s": "SAMPLE Set Beta",
+   "sc": "SMB",
+   "num": "004/80",
+   "r": "Epic",
+   "t": "Unit",
+   "x": {
+    "Class": "Sample Priest",
+    "Cost": 6,
+    "ATK": 5,
+    "Health": 6
+   },
+   "img": "https://sample.invalid/img/900014.png",
+   "u": "https://sample.invalid/product/900014"
+  },
+  {
+   "p": 900015,
+   "n": "Sample Bone Drake",
+   "g": 24002,
+   "s": "SAMPLE Set Beta",
+   "sc": "SMB",
+   "num": "045/80",
+   "r": "Rare",
+   "t": "Unit",
+   "x": {
+    "Class": "Sample Mage",
+    "Cost": 5,
+    "ATK": 5,
+    "Health": 5
+   },
+   "img": "https://sample.invalid/img/900015.png",
+   "u": "https://sample.invalid/product/900015"
+  },
+  {
+   "p": 900016,
+   "n": "Sample Rune Smith",
+   "g": 24002,
+   "s": "SAMPLE Set Beta",
+   "sc": "SMB",
+   "num": "046/80",
+   "r": "Common",
+   "t": "Unit",
+   "x": {
+    "Class": "Sample Mage",
+    "Cost": 2,
+    "ATK": 1,
+    "Health": 3
+   },
+   "img": "https://sample.invalid/img/900016.png",
+   "u": "https://sample.invalid/product/900016"
+  },
+  {
+   "p": 900017,
+   "n": "Sample Tide Caller",
+   "g": 24002,
+   "s": "SAMPLE Set Beta",
+   "sc": "SMB",
+   "num": "047/80",
+   "r": "Common",
+   "t": "Unit",
+   "x": {
+    "Class": "Sample Rogue",
+    "Cost": 2,
+    "ATK": 2,
+    "Health": 2
+   },
+   "img": "https://sample.invalid/img/900017.png",
+   "u": "https://sample.invalid/product/900017"
+  },
+  {
+   "p": 900018,
+   "n": "Sample Witch of Ash",
+   "g": 24002,
+   "s": "SAMPLE Set Beta",
+   "sc": "SMB",
+   "num": "048/80",
+   "r": "Rare",
+   "t": "Hero",
+   "x": {
+    "Class": "Sample Mage",
+    "Faction": "Sample B",
+    "Cost": 6
+   },
+   "img": "https://sample.invalid/img/900018.png",
+   "u": "https://sample.invalid/product/900018"
+  },
+  {
+   "p": 900019,
+   "n": "Sample Lantern Keeper",
+   "g": 24002,
+   "s": "SAMPLE Set Beta",
+   "sc": "SMB",
+   "num": "049/80",
+   "r": "Uncommon",
+   "t": "Unit",
+   "x": {
+    "Class": "Sample Priest",
+    "Cost": 2,
+    "ATK": 1,
+    "Health": 4
+   },
+   "img": "https://sample.invalid/img/900019.png",
+   "u": "https://sample.invalid/product/900019"
+  },
+  {
+   "p": 900020,
+   "n": "Sample Thorn Druid",
+   "g": 24001,
+   "s": "SAMPLE Set Alpha",
+   "sc": "SMA",
+   "num": "020/120",
+   "r": "Common",
+   "t": "Unit",
+   "x": {
+    "Class": "Sample Druid",
+    "Cost": 3,
+    "ATK": 2,
+    "Health": 3
+   },
+   "img": "https://sample.invalid/img/900020.png",
+   "u": "https://sample.invalid/product/900020"
+  },
+  {
+   "p": 900021,
+   "n": "Sample Bronze Sentinel",
+   "g": 24001,
+   "s": "SAMPLE Set Alpha",
+   "sc": "SMA",
+   "num": "021/120",
+   "r": "Common",
+   "t": "Unit",
+   "x": {
+    "Class": "Sample Warrior",
+    "Cost": 2,
+    "ATK": 1,
+    "Health": 4
+   },
+   "img": "https://sample.invalid/img/900021.png",
+   "u": "https://sample.invalid/product/900021"
+  },
+  {
+   "p": 900022,
+   "n": "Sample Crystal Golem",
+   "g": 24001,
+   "s": "SAMPLE Set Alpha",
+   "sc": "SMA",
+   "num": "022/120",
+   "r": "Rare",
+   "t": "Unit",
+   "x": {
+    "Class": "Sample Warrior",
+    "Cost": 6,
+    "ATK": 5,
+    "Health": 6
+   },
+   "img": "https://sample.invalid/img/900022.png",
+   "u": "https://sample.invalid/product/900022"
+  },
+  {
+   "p": 900023,
+   "n": "Sample Sky Ranger",
+   "g": 24002,
+   "s": "SAMPLE Set Beta",
+   "sc": "SMB",
+   "num": "023/80",
+   "r": "Common",
+   "t": "Unit",
+   "x": {
+    "Class": "Sample Hunter",
+    "Cost": 3,
+    "ATK": 2,
+    "Health": 3
+   },
+   "img": "https://sample.invalid/img/900023.png",
+   "u": "https://sample.invalid/product/900023"
+  },
+  {
+   "p": 900024,
+   "n": "Sample Night Bloom",
+   "g": 24002,
+   "s": "SAMPLE Set Beta",
+   "sc": "SMB",
+   "num": "024/80",
+   "r": "Epic",
+   "t": "Spell",
+   "x": {
+    "Class": "Sample Druid",
+    "Cost": 4
+   },
+   "img": "https://sample.invalid/img/900024.png",
+   "u": "https://sample.invalid/product/900024"
+  },
+  {
+   "p": 900025,
+   "n": "Sample Moon Holo Drake",
+   "g": 24002,
+   "s": "SAMPLE Set Beta",
+   "sc": "SMB",
+   "num": "050/80",
+   "r": "Rare",
+   "t": "Unit",
+   "x": {
+    "Class": "Sample Mage",
+    "Cost": 5,
+    "ATK": 4,
+    "Health": 4
+   },
+   "img": "https://sample.invalid/img/900025.png",
+   "u": "https://sample.invalid/product/900025"
+  }
+ ]
+}
