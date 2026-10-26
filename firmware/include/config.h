@@ -12,7 +12,7 @@
 #endif
 
 #ifndef DATA_URL
-#define DATA_URL "https://example.github.io/wowtrading/data/"
+#define DATA_URL "https://nackapatz.github.io/wowtrading/data/"
 #endif
 
 // ---------------------------------------------------------------------------

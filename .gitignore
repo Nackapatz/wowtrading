@@ -7,3 +7,4 @@ build/
 dist/
 *.spec
 flasher/firmware.bin
+*.bundle
