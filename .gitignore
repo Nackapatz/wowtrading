@@ -8,3 +8,8 @@ dist/
 *.spec
 flasher/firmware.bin
 *.bundle
+
+# Lokale Probe-Daten (Fremddaten ohne Lizenz) und OTA-Builds, nicht ins Repo
+probe/
+cardcarp_probe.md
+firmware-ota.bin
