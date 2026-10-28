@@ -806,7 +806,8 @@ async function evalCard(cv, src, inj) {
   let res = null;
   if (S.art && cv) {
     const im = cv.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, cv.width, cv.height);
-    res = matchArt(self.WowArtHash.artHash(im.data, cv.width, cv.height, 4));
+    const ah = self.WowArtHash.artHash(im.data, cv.width, cv.height, 4);
+    res = matchArt(ah); res.q = [ah.hash, ah.color];   // q: eigener Hash fürs Log
   }
   const ms = performance.now() - t0;
   S.dbgArt = { res, ms };
@@ -838,7 +839,7 @@ function logEval(src, x) {
   const entry = {
     t: new Date().toISOString(), src, st: x.st, ms: num(x.ms), artMs: num(x.artMs), shots: x.shots || 1,
     wait: num(x.wait), blur: x.blur || 0, sharp: num(x.sharp),
-    art: a ? { d: a.best ?? null, mg: a.margin ?? null, ok: !!a.ok, top: a.top && a.top[0] ? cut(a.top[0].cards[0].n) : null } : null,
+    art: a ? { d: a.best ?? null, mg: a.margin ?? null, ok: !!a.ok, top: a.top && a.top[0] ? cut(a.top[0].cards[0].n) : null, ...(a.ok || !a.q ? {} : { h: a.q }) } : null,   // h: Hash bei Fehlschlag (Vergleich mit hashes.json)
     ocr: Object.fromEntries(Object.entries(x.raw || {}).map(([k, v]) => [k, cut(v)])), ocrMs: x.ocrMs || {},
     cand: m.ranked.slice(0, 3).map((c) => [cut(c.card.n), cut(c.card.sc || c.card.s, 24), c.card.num ?? null, Math.round(c.pts), cut(c.sig.join(' '), 80)]),
     lead: Math.round(m.lead || 0),
