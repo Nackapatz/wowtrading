@@ -942,6 +942,18 @@ async function main() {
       const rec = await lastRec();
       assert.equal(rec.productId, 900003, 'falsche Karte: ' + rec.productId);
       await api('DELETE', `/api/scans?id=${rec.id}`);   // Testdublette wieder entfernen
+      // Erkennungs-Log: eine Zeile mit Quelle, Ergebnis, Bildabgleich und Kandidaten
+      let log = [];
+      for (let i = 0; i < 20 && !log.length; i++) {
+        const t = await (await fetch(`http://127.0.0.1:${PORT}/api/log`)).text();
+        log = t.split('\n').filter(Boolean).map((l) => JSON.parse(l)).filter((e) => e.src === 'gal');
+        if (!log.length) await new Promise((r) => setTimeout(r, 250));
+      }
+      assert.ok(log.length, 'kein Erkennungs-Log angekommen');
+      const e = log[log.length - 1];
+      assert.equal(e.st, 'captured');
+      assert.ok(e.art && typeof e.art.d === 'number', 'Bildabgleich fehlt im Log');
+      assert.ok(Array.isArray(e.cand) && e.cand.length >= 1 && typeof e.ms === 'number', 'Kandidaten/Zeit fehlen im Log');
       assert.deepEqual(p.errors, []);
     } finally { await b.close(); }
   });

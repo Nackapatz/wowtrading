@@ -78,7 +78,7 @@ function loadCal() {
   const off = {};
   for (const r of CAL_REGS) off[r] = [cl(o[r] && o[r][0]), cl(o[r] && o[r][1])];
   const sh = Number(c.sharpMin);
-  return { off, debug: !!c.debug, imgMax: img >= 40 && img <= 110 ? Math.round(img) : MATCH_MAX,
+  return { off, debug: !!c.debug, log: c.log !== false, imgMax: img >= 40 && img <= 110 ? Math.round(img) : MATCH_MAX,
     sharpMin: sh >= 10 && sh <= 200 ? Math.round(sh) : SHARP_MIN };
 }
 function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* Speicher gesperrt: egal */ } }
@@ -782,11 +782,11 @@ async function evalCard(cv, src, inj) {
   const ms = performance.now() - t0;
   S.dbgArt = { res, ms };
   if (S.cal.debug && cv) drawArtDebug(cv);
-  const raw = {};
+  const raw = {}, ocrMs = {};
   let m;
   if (inj) { for (const r of REGS) raw[r] = inj[r] || ''; m = score(res, raw); }
   else {
-    const read = async (r) => { raw[r] = (await ocrRegion(src, r)) || ''; };
+    const read = async (r) => { const t = performance.now(); raw[r] = (await ocrRegion(src, r)) || ''; ocrMs[r] = Math.round(performance.now() - t); };
     m = score(res, raw);
     if (!m.sure && ocrUsable('eng')) {
       await read('strip'); m = score(res, raw);
@@ -794,7 +794,22 @@ async function evalCard(cv, src, inj) {
     }
     if (!m.sure && ocrUsable('deu')) { await read('name'); m = score(res, raw); }
   }
-  return { res, raw, m, ms };
+  return { res, raw, m, ms, ocrMs };
+}
+/* Erkennungs-Log (Einstellung „Erkennungs-Log an den Scanner senden“): eine Zeile je Auswertung an POST /api/log.
+ * src: cam | gal; x: { st, m, res, raw, ocrMs, ms, artMs, shots, wait, blur, sharp } */
+function logEval(src, x) {
+  if (!S.cal.log || !S.espOk) return;
+  const cut = (v, n = 60) => String(v == null ? '' : v).slice(0, n), a = x.res, m = x.m, num = (v) => (v == null ? null : Math.round(v));
+  const entry = {
+    t: new Date().toISOString(), src, st: x.st, ms: num(x.ms), artMs: num(x.artMs), shots: x.shots || 1,
+    wait: num(x.wait), blur: x.blur || 0, sharp: num(x.sharp),
+    art: a ? { d: a.best ?? null, mg: a.margin ?? null, ok: !!a.ok, top: a.top && a.top[0] ? cut(a.top[0].cards[0].n) : null } : null,
+    ocr: Object.fromEntries(Object.entries(x.raw || {}).map(([k, v]) => [k, cut(v)])), ocrMs: x.ocrMs || {},
+    cand: m.ranked.slice(0, 3).map((c) => [cut(c.card.n), cut(c.card.sc || c.card.s, 24), c.card.num ?? null, Math.round(c.pts), cut(c.sig.join(' '), 80)]),
+    lead: Math.round(m.lead || 0),
+  };
+  api('POST', 'api/log', entry).catch(() => { /* Log ist optional */ });
 }
 // Testpfad (window.__wow.frame, testImage): eine Auswertung; bei eindeutigem Ergebnis sofort erfasst
 async function processCard(cv, feed = true, inj = null, hi = null) {
@@ -905,7 +920,7 @@ function renderDbg() {
  * Alle 150 ms wird der Kartenrand gesucht (tick). Drei ruhige Treffer in Folge (Ecken bewegen sich
  * höchstens 2 % der Kartenbreite) → Foto. Nach Erfassen oder Vorschlägen (wait-remove) erst weiter, wenn
  * zwei Erkennungen in Folge nichts finden oder sich die Ecken um mehr als 15 % verschieben. */
-function newCd() { return { state: 'search', stable: 0, ref: null, last: null, lockC: null, score: null }; }
+function newCd() { return { state: 'search', stable: 0, ref: null, last: null, lockC: null, score: null, t0: null, blur: 0 }; }
 const cardW = (c) => (Math.hypot(c[1][0] - c[0][0], c[1][1] - c[0][1]) + Math.hypot(c[2][0] - c[3][0], c[2][1] - c[3][1])) / 2;
 const moved = (a, b) => Math.max(...a.map((p, i) => Math.hypot(p[0] - b[i][0], p[1] - b[i][1])));
 const guideCorners = () => { const g = S.guide; return [[g.x, g.y], [g.x + g.w, g.y], [g.x + g.w, g.y + g.h], [g.x, g.y + g.h]]; };
@@ -1019,6 +1034,7 @@ async function scanPhoto(file) {
     if (!s1) { toast('Karte konnte nicht entzerrt werden.', 'err'); setLive(''); return; }
     S.dbgShot = { sharp: s1.sharp };   // nur anzeigen, Galeriefotos werden nicht wegen Unschärfe verworfen
     if (S.cal.debug) drawCardDebug(s1.cv);
+    const t0 = performance.now();
     const e = await evalCard(s1.cv, s1.hi, null);
     S.dbg = { raw: e.raw, m: e.m };
     renderDbg();
@@ -1027,6 +1043,7 @@ async function scanPhoto(file) {
       readName: async () => { const t = cleanDe(await ocrRegion(s1.hi, 'name')); return t || null; },
     };
     const st = await decide(e.m, ctx);
+    logEval('gal', { st, m: e.m, res: e.res, raw: e.raw, ocrMs: e.ocrMs, ms: performance.now() - t0, artMs: e.ms, sharp: s1.sharp });
     if (st === 'captured') setLive(`Erfasst: ${e.m.ranked[0].card.n}. Nächstes Foto oder Karte auflegen.`);
     else if (st === 'none') setLive('Nicht erkannt. Nächstes Foto wählen.');
     // Sperre: Live-Erkennung erfasst dieselbe Karte nicht sofort erneut. Sie gilt, solange die Karte im Kamerabild liegt.
@@ -1063,7 +1080,7 @@ function torchOff() {
 }
 function unlock() {
   S.locked = null; S.miss = 0;
-  S.cd.lockC = null; S.cd.stable = 0; S.cd.ref = null; S.cd.state = 'search';
+  S.cd.lockC = null; S.cd.stable = 0; S.cd.ref = null; S.cd.state = 'search'; S.cd.t0 = null; S.cd.blur = 0;
 }
 function drawCardDebug(src) {
   const c = $('#cvCard');
@@ -1072,6 +1089,7 @@ function drawCardDebug(src) {
 }
 // Ein Foto auswerten: Schärfe, Bildabgleich, OCR (ggf. zwei weitere Standbilder), dann erfassen oder vorschlagen
 async function shotAt(corners) {
+  const t0 = performance.now();
   S.cd.state = 'shot';
   setLive('Auswerten …');
   const s1 = takeShot(corners);
@@ -1079,13 +1097,14 @@ async function shotAt(corners) {
   S.dbgShot = { sharp: s1.sharp };
   if (s1.sharp < S.cal.sharpMin) {
     S.cd.state = 'steady';
+    S.cd.blur++;
     setLive('Unscharf – ruhig halten …');
     renderDbg();
     return;
   }
   if (S.cal.debug) drawCardDebug(s1.cv);
   const e = await evalCard(s1.cv, s1.hi, null);
-  let m = e.m, raw = e.raw;
+  let m = e.m, raw = e.raw, shots = 1;
   if (!m.sure) {
     const cands = e.m.ranked.slice(0, 3).map((c) => c.card), raws = [e.raw];
     for (let i = 0; i < 2 && !m.sure; i++) {
@@ -1094,6 +1113,7 @@ async function shotAt(corners) {
       const s = takeShot(d.corners);
       if (!s || s.sharp < S.cal.sharpMin) continue;
       raws.push(await readAll(s.hi));
+      shots++;
       raw = mergeRaw(raws, cands);
       m = score(e.res, raw);
     }
@@ -1105,6 +1125,8 @@ async function shotAt(corners) {
     readName: async () => { const t = cleanDe(await ocrRegion(s1.hi, 'name')); return t || null; },
   };
   const st = await decide(m, ctx);
+  logEval('cam', { st, m, res: e.res, raw, ocrMs: e.ocrMs, ms: performance.now() - t0, artMs: e.ms, shots,
+    wait: S.cd.t0 != null ? t0 - S.cd.t0 : null, blur: S.cd.blur, sharp: s1.sharp });
   if (st === 'captured') setLive(`Erfasst: ${m.ranked[0].card.n}. Nächste Karte auflegen.`);
   else {
     S.locked = '?';   // Vorschläge, Fehlschlag oder unbekannte Karte: erst weiter, wenn die Karte weg ist
@@ -1125,7 +1147,8 @@ async function tick() {
     } else if (++S.miss >= 2) unlock();
     return;
   }
-  if (!det) { S.cd.state = 'search'; S.cd.stable = 0; S.cd.ref = null; setLive('Karte in den Rahmen legen …'); return; }
+  if (!det) { S.cd.state = 'search'; S.cd.stable = 0; S.cd.ref = null; S.cd.t0 = null; S.cd.blur = 0; setLive('Karte in den Rahmen legen …'); return; }
+  if (S.cd.t0 == null) S.cd.t0 = performance.now();   // Log: Zeit von der ersten Erkennung bis zum Foto
   S.cd.stable = S.cd.ref && moved(det.corners, S.cd.ref) <= 0.02 * cardW(det.corners) ? S.cd.stable + 1 : 1;
   S.cd.ref = det.corners;
   if (S.cd.stable < 3) { S.cd.state = 'search'; setLive('Karte erkannt – ruhig halten …'); return; }
@@ -1642,6 +1665,7 @@ function renderCal() {
   $('#calYS').value = o[1]; $('#calYV').textContent = o[1];
   $('#learnInfo').textContent = `${Object.keys(S.learned).length} gelernte Zuordnungen`;
   $('#calDbg').checked = S.cal.debug;
+  $('#calLog').checked = S.cal.log;
 }
 function saveCal() { lsSet(LS_CAL, S.cal); }
 // Import gelernter Namen: { names: {de: k} } oder direkt {de: k}; wird zusammengeführt
@@ -1776,6 +1800,7 @@ function bindUi() {
     if (f) toast(importLearned(await f.text()));
   });
   $('#calDbg').addEventListener('change', (e) => { S.cal.debug = e.target.checked; saveCal(); renderDbg(); });
+  $('#calLog').addEventListener('change', (e) => { S.cal.log = e.target.checked; saveCal(); });
   $('#calImgS').addEventListener('input', (e) => { S.cal.imgMax = Number(e.target.value); $('#calImgV').textContent = S.cal.imgMax; saveCal(); });
   $('#calSharpS').addEventListener('input', (e) => { S.cal.sharpMin = Number(e.target.value); $('#calSharpV').textContent = S.cal.sharpMin; saveCal(); });
   $('#calReset').addEventListener('click', () => { for (const r of CAL_REGS) S.cal.off[r] = [0, 0]; S.cal.imgMax = MATCH_MAX; S.cal.sharpMin = SHARP_MIN; saveCal(); renderCal(); layoutGuide(); });

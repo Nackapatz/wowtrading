@@ -49,6 +49,10 @@ constexpr char CERT_FILE[] = "/cert.pem";
 constexpr char KEY_FILE[] = "/key.pem";
 constexpr char SCANS_FILE[] = "/scans.jsonl";
 constexpr char SCANS_TMP_FILE[] = "/scans.tmp";
+constexpr char LOG_FILE[] = "/log.jsonl";       // recognition log from the app (POST /api/log)
+constexpr char LOG_OLD_FILE[] = "/log.old";     // previous log after rotation
+constexpr size_t LOG_MAX_BYTES = 32 * 1024;     // rotate above this size
+constexpr size_t MAX_LOG_BODY = 1536;           // POST /api/log body limit
 
 constexpr size_t MAX_SCANS = 2000;
 constexpr size_t MAX_SCAN_BODY = 2048;   // POST /api/scan body limit

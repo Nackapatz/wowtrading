@@ -27,6 +27,7 @@ const START = Date.now();
 function freshState() {
   return {
     scans: [],
+    log: [],
     nextId: 1,
     settings: { country: 'DE', currency: 'EUR', dataUrl: null }, // dataUrl wird pro Anfrage aus dem Host gesetzt
   };
@@ -77,6 +78,11 @@ async function api(req, res, url) {
       freeHeap: 30000, maxBlock: 21000, heapFrag: 12, minHeap: 15000, rssi: -58, wifiDrops: 0, resetReason: 'Software/System restart', uptime: Math.floor((Date.now() - START) / 1000),
       country: state.settings.country, currency: state.settings.currency, dataUrl: state.settings.dataUrl,
     });
+  }
+  if (url.pathname === '/api/log') {
+    if (req.method === 'POST') { const e = await readJson(req, 1536); state.log.push(e); return send(res, 200, { ok: true }); }
+    if (req.method === 'GET') { const body = state.log.map((e) => JSON.stringify(e) + '\n').join(''); res.writeHead(200, { 'Content-Type': 'application/x-ndjson' }); return res.end(body); }
+    if (req.method === 'DELETE') { state.log = []; return send(res, 200, { ok: true }); }
   }
   if (url.pathname === '/api/scans') {
     if (req.method === 'GET') return send(res, 200, state.scans);

@@ -233,6 +233,49 @@ void handleScansGet() {
     flushBlock();
 }
 
+// Sends a LittleFS file with Content-Length in blocks (empty body if it is missing).
+void sendFile(const char* path, const char* mime) {
+    File file = LittleFS.open(path, "r");
+    https.sendHeader("Cache-Control", "no-store");
+    https.setContentLength(file ? file.size() : 0);
+    https.send(200, mime, "");
+    if (!file) return;
+    auto& client = https.client();
+    while (file.available() > 0) {
+        const int n = file.read(reinterpret_cast<uint8_t*>(g_scanBlock), kScanBlock);
+        if (n <= 0 || client.write(reinterpret_cast<const uint8_t*>(g_scanBlock), n) != static_cast<size_t>(n)) break;
+    }
+    file.close();
+}
+
+// Recognition log: the app posts one JSON line per evaluation, for debugging
+// from a PC (GET /api/log, ?old=1 for the rotated file, DELETE clears).
+void handleLogPost() {
+    const String body = https.arg("plain");
+    if (body.isEmpty() || body.length() > MAX_LOG_BODY || body.indexOf('\n') >= 0) return sendError(400, "bad_body");
+    File file = LittleFS.open(LOG_FILE, "a");
+    if (!file) return sendError(500, "io_error");
+    const bool ok = file.print(body) == body.length() && file.write('\n') == 1;
+    const size_t size = file.size();
+    file.close();
+    if (size > LOG_MAX_BYTES) {
+        LittleFS.remove(LOG_OLD_FILE);
+        LittleFS.rename(LOG_FILE, LOG_OLD_FILE);
+    }
+    if (!ok) return sendError(500, "io_error");
+    sendOk();
+}
+
+void handleLogGet() {
+    sendFile(https.hasArg("old") ? LOG_OLD_FILE : LOG_FILE, "application/x-ndjson");
+}
+
+void handleLogDelete() {
+    LittleFS.remove(LOG_FILE);
+    LittleFS.remove(LOG_OLD_FILE);
+    sendOk();
+}
+
 bool readIdArg(uint32_t& id) {
     if (!https.hasArg("id")) return false;
     id = static_cast<uint32_t>(https.arg("id").toInt());
@@ -396,6 +439,9 @@ void registerRoutes() {
     https.on("/api/scans", HTTP_DELETE, handleScansDelete);
     https.on("/api/settings", HTTP_GET, handleSettingsGet);
     https.on("/api/settings", HTTP_POST, handleSettingsPost);
+    https.on("/api/log", HTTP_POST, handleLogPost);
+    https.on("/api/log", HTTP_GET, handleLogGet);
+    https.on("/api/log", HTTP_DELETE, handleLogDelete);
     https.on("/api/update", HTTP_POST, handleUpdateDone, handleUpdateUpload);
     https.onNotFound(handleNotFound);
 }
