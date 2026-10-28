@@ -161,7 +161,8 @@ async function apiDo(method, path, body) {
 }
 async function apiRequest(method, path, body) {
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), 8000);
+  // Die Sammlung kann einige hundert Einträge haben: dafür mehr Zeit lassen
+  const timer = setTimeout(() => ctl.abort(), method === 'GET' && path === 'api/scans' ? 30000 : 8000);
   try {
     const init = { method, cache: 'no-store', signal: ctl.signal };
     if (body !== undefined) { init.headers = { 'Content-Type': 'application/json' }; init.body = JSON.stringify(body); }
@@ -1540,7 +1541,8 @@ function renderEspInfo() {
   const e = S.esp;
   $('#espInfo').innerHTML = e
     ? [['Version', e.version], ['IP', e.ip], ['Hostname', e.hostname ? e.hostname + '.local' : '–'], ['Scans', e.scans],
-      ['Freier Speicher', e.freeHeap != null ? e.freeHeap + ' B' : '–'], ['Laufzeit', fmtUptime(e.uptime)],
+      ['Freier Speicher', e.freeHeap != null ? e.freeHeap + ' B' + (e.maxBlock != null ? ` (größter Block ${e.maxBlock} B, Minimum ${e.minHeap} B)` : '') : '–'], ['Laufzeit', fmtUptime(e.uptime)],
+      ...(e.rssi != null ? [['WLAN-Signal', `${e.rssi} dBm · ${e.wifiDrops} Abbrüche`], ['Letzter Neustart', e.resetReason || '–']] : []),
       ['Land / Währung', `${e.country} / ${e.currency}`]]
       .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')
     : '<dt>Status</dt><dd>Scanner nicht erreichbar</dd>';

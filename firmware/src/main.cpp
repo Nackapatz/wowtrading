@@ -8,12 +8,14 @@
 //   webserver    HTTPS app + API, HTTP redirect
 //   scans        scan records in LittleFS
 //   ota          ArduinoOTA and web upload
+//   health       WLAN/heap watchdog for long-term use
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266mDNS.h>
 
 #include "config.h"
 #include "display.h"
+#include "health.h"
 #include "ota.h"
 #include "provisioning.h"
 #include "scans.h"
@@ -47,6 +49,9 @@ void startServices() {
 void wifiBegin() {
     WiFi.persistent(false);  // do not rewrite flash on every connect
     WiFi.mode(WIFI_STA);
+    // Modem sleep saves little on USB power but delays and drops incoming
+    // connections; a server that must stay reachable keeps the radio awake.
+    WiFi.setSleepMode(WIFI_NONE_SLEEP);
     WiFi.setAutoReconnect(true);
     WiFi.hostname(gConfig.hostname);
     WiFi.begin(gConfig.ssid.c_str(), gConfig.pass.c_str());
@@ -73,6 +78,7 @@ void wifiLoop() {
         // Dropped after a working connection: give auto-reconnect a full window.
         g_wifiUp = false;
         g_wifiAttemptStart = millis();
+        healthNoteWifiDrop();
         if (g_splashUntil == 0) displayMessage("WLAN getrennt", gConfig.ssid.c_str(), "Verbinde neu...");
     }
 
@@ -123,6 +129,7 @@ void loop() {
 
     if (g_configured) {
         wifiLoop();
+        healthLoop(g_wifiUp);
     }
 
     if (g_wifiUp && g_servicesStarted) {

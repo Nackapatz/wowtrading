@@ -6,9 +6,11 @@
 #include <ESP8266WebServerSecure.h>
 #include <ESP8266WiFi.h>
 #include <LittleFS.h>
+#include <StackThunk.h>
 
 #include "config.h"
 #include "display.h"
+#include "health.h"
 #include "ota.h"
 #include "scans.h"
 #include "util.h"
@@ -35,6 +37,9 @@ BearSSL::ServerSessions sessionCache(5);
 // so the PEM text itself is not kept. These objects live for the whole run.
 BearSSL::X509List* g_chain = nullptr;
 BearSSL::PrivateKey* g_privateKey = nullptr;
+
+// Time of the last HTTPS request, for the health checks (health.cpp).
+uint32_t g_lastRequestMs = 0;
 
 // Headers the OTA handler reads with header(); they must be collected before begin().
 const char* kCollectedHeaders[] = {"X-OTA-Pass", "Content-Length"};
@@ -139,6 +144,12 @@ void handleStatus() {
     doc["hostname"] = gConfig.hostname;
     doc["scans"] = scansCount();
     doc["freeHeap"] = ESP.getFreeHeap();
+    doc["maxBlock"] = ESP.getMaxFreeBlockSize();
+    doc["heapFrag"] = ESP.getHeapFragmentation();
+    doc["minHeap"] = healthMinFreeHeap();
+    doc["rssi"] = WiFi.RSSI();
+    doc["wifiDrops"] = healthWifiDrops();
+    doc["resetReason"] = ESP.getResetReason();
     doc["uptime"] = millis() / 1000;
     doc["country"] = gConfig.country;
     doc["currency"] = gConfig.currency;
@@ -178,19 +189,39 @@ void handleScanPost() {
     sendJson(200, response);
 }
 
-// Streams the stored scans. The array is sent with chunked transfer encoding,
-// so the file never has to fit in RAM.
+// Streams the stored scans as one JSON array. A first pass over the file gives
+// the exact length, so the body goes out with Content-Length in ~1.4 KB blocks.
+// (Chunked mode sent three TLS records per scan, each waiting for its ACK; with
+// a few hundred scans that took minutes and blocked the server.)
+constexpr size_t kScanBlock = 1400;
+char g_scanBlock[kScanBlock];
+
 void handleScansGet() {
+    size_t total = 0;
+    scansStream([&](const char*, size_t length) { total += length; });
+
     https.sendHeader("Cache-Control", "no-store");
-    // Chunked mode needs HTTP/1.1; the core refuses it for HTTP/1.0 clients.
-    if (!https.chunkedResponseModeStart(200, "application/json; charset=utf-8")) {
-        return sendError(505, "http11_required");
-    }
-    scansStream([](const char* data, size_t length) {
-        https.sendContent(data, length);
-        yield();
+    https.setContentLength(total);
+    https.send(200, "application/json; charset=utf-8", "");
+
+    auto& client = https.client();
+    size_t used = 0;
+    bool ok = true;
+    auto flushBlock = [&]() {
+        if (ok && used > 0 && client.write(reinterpret_cast<const uint8_t*>(g_scanBlock), used) != used) ok = false;
+        used = 0;
+    };
+    scansStream([&](const char* data, size_t length) {
+        while (ok && length > 0) {
+            const size_t n = length < kScanBlock - used ? length : kScanBlock - used;
+            memcpy(g_scanBlock + used, data, n);
+            used += n;
+            data += n;
+            length -= n;
+            if (used == kScanBlock) flushBlock();
+        }
     });
-    https.chunkedResponseFinalize();
+    flushBlock();
 }
 
 bool readIdArg(uint32_t& id) {
@@ -380,9 +411,20 @@ void webserverBegin() {
 
     https.collectHeaders(kCollectedHeaders, sizeof(kCollectedHeaders) / sizeof(kCollectedHeaders[0]));
     registerRoutes();
+    https.addHook([](const String&, const String&, WiFiClient*, BearSSL::ESP8266WebServerSecure::ContentTypeFunction) {
+        g_lastRequestMs = millis();
+        return BearSSL::ESP8266WebServerSecure::CLIENT_REQUEST_CAN_CONTINUE;
+    });
 
-    https.getServer().setECCert(g_chain, BR_KEYTYPE_KEYX | BR_KEYTYPE_SIGN, g_privateKey);
-    https.getServer().setCache(&sessionCache);
+    // Keep BearSSL's 6 KB stack allocated for good. Otherwise it is freed and
+    // re-allocated around every connection, which fragments the heap over days.
+    stack_thunk_add_ref();
+
+    BearSSL::WiFiServerSecure& server = https.getServer();
+    server.setECCert(g_chain, BR_KEYTYPE_KEYX | BR_KEYTYPE_SIGN, g_privateKey);
+    server.setCache(&sessionCache);
+    server.setBufferSizes(TLS_RX_BUFFER, TLS_TX_BUFFER);
+    server.setNoDelay(true);  // send each TLS record at once instead of waiting for Nagle
     https.begin();
 
     httpRedirect.onNotFound(handleRedirectToHttps);
@@ -392,4 +434,8 @@ void webserverBegin() {
 void webserverLoop() {
     https.handleClient();
     httpRedirect.handleClient();
+}
+
+uint32_t webserverIdleMs() {
+    return millis() - g_lastRequestMs;
 }

@@ -74,7 +74,7 @@ async function api(req, res, url) {
   if (req.method === 'GET' && url.pathname === '/api/status') {
     return send(res, 200, {
       version: 'mock-1.0.0', ip: '127.0.0.1', hostname: 'wowscanner-mock', scans: state.scans.length,
-      freeHeap: 38000, uptime: Math.floor((Date.now() - START) / 1000),
+      freeHeap: 30000, maxBlock: 21000, heapFrag: 12, minHeap: 15000, rssi: -58, wifiDrops: 0, resetReason: 'Software/System restart', uptime: Math.floor((Date.now() - START) / 1000),
       country: state.settings.country, currency: state.settings.currency, dataUrl: state.settings.dataUrl,
     });
   }
