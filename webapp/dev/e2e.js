@@ -265,7 +265,7 @@ async function main() {
       assert.equal(r.best.pid, pid);
       assert.equal(r.via, 'Bild');
       assert.ok(r.best.d <= 20, 'Distanz ' + r.best.d);
-      assert.ok(r.margin >= 12, 'Abstand ' + r.margin);
+      assert.ok(r.margin >= 8, 'Abstand ' + r.margin);
       assert.ok(r.ms < 30, 'Zeit ' + r.ms);
     }
   });
@@ -343,7 +343,7 @@ async function main() {
     await setRange(page, '#calImgS', 110);
     const r2 = await testImage(900005, { filter: 'blur(3px) brightness(1.3)', feed: false });
     assert.ok(r2.ok, 'Toleranz 110: ' + JSON.stringify(r2.best));
-    assert.equal(r.ok, r.best.d <= 40 && r.margin >= 12, 'Grenze 40 wird angewandt');
+    assert.equal(r.ok, r.best.d <= 40 && r.margin >= 8, 'Grenze 40 wird angewandt');
     await page.click('#calReset');
     assert.equal(await page.inputValue('#calImgS'), '90');
     await tab(page, 'scan');

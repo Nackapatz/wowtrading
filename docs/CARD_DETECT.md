@@ -247,3 +247,12 @@ Das Erkennungs-Log (`/api/log`) vom 28.10. zeigte bei echten Scans:
 - Die Bilderkennung hatte bei Kamerafotos die richtige Karte vorne, mit Distanz 79–87 und Abstand 13–19 zur nächsten Illustration. Die Grenze 70 verwarf diese Treffer. Der Grenzwert `MATCH_MAX` ist jetzt 90. Gespeicherte Werte aus älteren Versionen werden einmalig ersetzt (`imgV` 2). Zufallstreffer lagen bei d 97/98 mit Abstand 2–4 und bleiben ausgeschlossen.
 - Bildpunkte richten sich nach dem Abstand statt nach der absoluten Distanz. Der beste Treffer erhält +30 bei einem Abstand von mindestens 12, sonst +10. Weitere Treffer erhalten max(0, 10 − (d − bestes d)).
 - Der Abzug für einen widersprechenden Wert bleibt bei −30. Mit −15 würde eine exakt gelesene falsche Nummer mit einem falschen Wert eine korrigierte Ziffer mit drei passenden Werten nicht mehr sicher schlagen (Test „153 statt 163“).
+
+## Anpassungen nach dem zweiten Log (Firmware 0.1.8)
+
+Mit 0.1.7 wurden die drei Quest-Karten jedes Mal über das Bild erfasst (Wartezeit 0,2 bis 1,1 s). Offen blieben:
+- Das hohe Nummernband las bei Verbündeten nur die letzte Flavor-Zeile. Das schmale Band (y 0,925, PSM 7) ist wieder der erste Versuch. Nur wenn darin kein „Wort 123/456“ steht, wird das hohe Band mehrzeilig gelesen (`STRIP_WIDE`).
+- Ya'za the Vandal: Das Bild war richtig, aber mit Abstand 9. Echte Treffer lagen in beiden Logs bei einem Abstand von mindestens 9, Zufallstreffer bei höchstens 4. `MATCH_MARGIN` ist jetzt 8.
+- Die Kosten-OCR (ein Zeichen im Kreis) las oft falsch, zum Beispiel 7 statt 4 und bei derselben Karte einmal 4, einmal 1, einmal 2. Falsche Kosten kosten −15 statt −30 und sperren einen eindeutigen Bildtreffer nicht mehr. Angriff und Leben bleiben bei −30.
+- Doppelte Erfassung derselben Karte im Abstand von 7 s: „entfernt“ gilt erst nach 4 Frames ohne Karte (600 ms) statt 2.
+- Ein Kartenbild ohne jeden Bildtreffer (Abstand 1 bis 4 bei allen Versuchen) bleibt auf Nummer und Name angewiesen.

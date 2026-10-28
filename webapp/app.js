@@ -38,13 +38,13 @@ const PT_IDX = { market: 0, low: 1, mid: 2 };
 const PT_ORDER = ['market', 'mid', 'low'];
 const MATCH_MAX = 90;      // Bild: Start-Grenzwert der Distanz (docs/IMAGE_MATCH.md), per „Bild-Toleranz“ einstellbar
 const IMG_V = 2;           // Version des Grenzwerts: gespeicherte Werte älterer Versionen (70) verfallen
-const MATCH_MARGIN = 12;   // Bild: Mindestabstand zur nächstbesten anderen Illustration
+const MATCH_MARGIN = 8;    // Bild: Mindestabstand zur nächstbesten anderen Illustration (Log: echte Treffer ≥ 9, Zufall ≤ 4)
 const SHARP_MIN = 60;      // Foto: Schärfe-Grenze (Laplace-Varianz, 400×558), per „Schärfe-Grenze“ einstellbar
 const HI_W = 800, HI_H = 1116;   // Foto: entzerrte Karte für die OCR (Bildabgleich nutzt 400×558)
 const DET_W = 240, DET_MS = 150; // Erkennung: Breite des Suchbildes, Takt in ms
 // Ruhig: STEADY_N Treffer in Folge, Ecken bewegen sich höchstens STEADY_TOL der Kartenbreite. Echte Logs: mit 3 Treffern
 // und 2 % wartete die App bei Handhaltung bis zu 22 s, ohne dass ein Foto unscharf war (die Schärfeprüfung bleibt).
-const STEADY_N = 2, STEADY_TOL = 0.04;
+const STEADY_N = 2, STEADY_TOL = 0.04, UNLOCK_MISS = 4;   // UNLOCK_MISS: Frames ohne Karte bis „entfernt“ (Flackern erfasste sonst doppelt)
 const RARITY = { C: 'Common', U: 'Uncommon', R: 'Rare', E: 'Epic' }; // andere Codes roh anzeigen, nicht raten
 const rarityName = (r) => RARITY[r] || (r == null ? '' : String(r));
 const setName = (s, sc) => s || sc || '';
@@ -560,19 +560,20 @@ function ocrUsable(lang = 'eng') {
 const AZ = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const REG = {
   name: { l: 'Name', x: 0.18, y: 0.025, w: 0.64, h: 0.065, lang: 'deu', psm: '7', wl: '', tw: 900 },
-  // Nummernleiste: hohes Band (mehrzeilig gelesen), das Muster „Wort 123/456“ wird im ganzen Text gesucht.
-  // Echte Fotos: bei leicht versetztem Rand traf ein schmales Band die Flavor-Zeile darüber.
-  strip: { l: 'Nummer', x: 0.16, y: 0.895, w: 0.60, h: 0.095, lang: 'eng', psm: '6', wl: AZ + AZ.toLowerCase() + '0123456789/ ', tw: 900 },
+  // Nummernleiste: schmales Band, bei Verbündeten sonst die Flavor-Zeile darüber (Log 0.1.7)
+  strip: { l: 'Nummer', x: 0.16, y: 0.925, w: 0.60, h: 0.05, lang: 'eng', psm: '7', wl: AZ + AZ.toLowerCase() + '0123456789/ ', tw: 900 },
   cost: { l: 'Kosten', x: 0.07, y: 0.025, w: 0.16, h: 0.10, lang: 'eng', psm: '10', wl: '0123456789', tw: 120 },
   atk: { l: 'Angriff', x: 0.05, y: 0.86, w: 0.16, h: 0.11, lang: 'eng', psm: '10', wl: '0123456789', tw: 120 },
   hp: { l: 'Leben', x: 0.83, y: 0.86, w: 0.15, h: 0.11, lang: 'eng', psm: '10', wl: '0123456789', tw: 120 },
 };
 const REGS = Object.keys(REG);
+// Zweiter Versuch, wenn im schmalen Band kein „Wort 123/456“ steht: hohes Band, mehrzeilig (Quests, versetzter Rand)
+const STRIP_WIDE = { y: 0.895, h: 0.095, psm: '6' };
 const ART_BOX = { x: 0.10, y: 0.14, w: 0.80, h: 0.42 };   // = REGION von artHash
 const CARD_W = 400, CARD_H = 558;                          // Kartenrahmen in Pixeln (wie _400w-Bilder)
 const clamp01 = (v, w) => Math.min(Math.max(v, 0), 1 - w);
-function regBox(r) {
-  const R = REG[r], o = S.cal.off[r] || [0, 0];
+function regBox(r, R = REG[r]) {
+  const o = S.cal.off[r] || [0, 0];
   return { x: clamp01(R.x + o[0] / 100, R.w), y: clamp01(R.y + o[1] / 100, R.h), w: R.w, h: R.h };
 }
 // Ausschnitt aus dem Karten-Canvas: Graustufen, Kontrast, dunkler Grund wird invertiert (helle Ziffern in Kreisen)
@@ -595,10 +596,10 @@ function cropFrom(src, cv, box, targetW) {
   return cv;
 }
 const regCv = (r) => $('#cv-' + r);
-async function ocrRegion(cv, r) {
-  const R = REG[r], w = ocrUsable(R.lang);
+async function ocrRegion(cv, r, alt) {
+  const R = alt ? { ...REG[r], ...alt } : REG[r], w = ocrUsable(R.lang);
   if (!w) return null;
-  cropFrom(cv, regCv(r), regBox(r), R.tw);
+  cropFrom(cv, regCv(r), regBox(r, R), R.tw);
   const key = R.psm + '|' + R.wl;
   if (w.psm !== key) { await w.setParameters({ tessedit_pageseg_mode: R.psm, tessedit_char_whitelist: R.wl }); w.psm = key; }
   const a = await w.recognize(regCv(r));
@@ -734,7 +735,7 @@ function learn(de, k) {
   lsSet(LS_LEARN, S.learned);
 }
 
-/* Punkte je Kandidat: Nr exakt 60 (Ziffernkorrektur 40), Gesamtzahl +10, Wert +10/−30,
+/* Punkte je Kandidat: Nr exakt 60 (Ziffernkorrektur 40), Gesamtzahl +10, Wert +10/−30 (Kosten −15, ohne Sperre des Bildtreffers),
  * Bild: bester Treffer +30 bei Abstand ≥ MATCH_MARGIN, sonst +10; weitere +max(0, 10 − (d − bestes d)),
  * gelernter Name +40, englischer Name ≥ 0,8 +20. */
 function score(res, raw) {
@@ -776,7 +777,8 @@ function score(res, raw) {
     for (const f in sv) {
       const v = sv[f], cv = c.card[f];
       if (v == null || cv == null || (f === 'cost' ? noCost : !ally)) continue;
-      if (v === cv) { c.pts += 10; c.sig.push(f); } else { c.pts -= 30; c.contra = true; c.sig.push('!' + f); }
+      if (v === cv) { c.pts += 10; c.sig.push(f); } else if (f === 'cost') { c.pts -= 15; c.sig.push('!cost'); }   // Kostenkreis oft verlesen (Log)
+      else { c.pts -= 30; c.contra = true; c.sig.push('!' + f); }
     }
   }
   let ranked = [...C.values()].sort((a, b) => b.pts - a.pts), top = ranked[0], others = ranked.slice(1);
@@ -813,7 +815,12 @@ async function evalCard(cv, src, inj) {
   let m;
   if (inj) { for (const r of REGS) raw[r] = inj[r] || ''; m = score(res, raw); }
   else {
-    const read = async (r) => { const t = performance.now(); raw[r] = (await ocrRegion(src, r)) || ''; ocrMs[r] = Math.round(performance.now() - t); };
+    const read = async (r) => {
+      const t = performance.now();
+      raw[r] = (await ocrRegion(src, r)) || '';
+      if (r === 'strip' && !parseStrip(raw[r])) { const v = (await ocrRegion(src, r, STRIP_WIDE)) || ''; if (parseStrip(v)) raw[r] = v; }
+      ocrMs[r] = Math.round(performance.now() - t);
+    };
     m = score(res, raw);
     if (!m.sure && ocrUsable('eng')) {
       await read('strip'); m = score(res, raw);
@@ -1171,7 +1178,7 @@ async function tick() {
     if (det) {
       if (S.cd.lockC && moved(det.corners, S.cd.lockC) > 0.15 * cardW(S.cd.lockC)) unlock();
       else S.miss = 0;
-    } else if (++S.miss >= 2) unlock();
+    } else if (++S.miss >= UNLOCK_MISS) unlock();
     return;
   }
   if (!det) { S.cd.state = 'search'; S.cd.stable = 0; S.cd.ref = null; S.cd.t0 = null; S.cd.blur = 0; setLive('Karte in den Rahmen legen …'); return; }

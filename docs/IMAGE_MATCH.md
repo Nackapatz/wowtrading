@@ -30,7 +30,7 @@ als 6 Hex-Zeichen `rrggbb`.
 - Kamerabild: Ausschnitt = Kartenrahmen des Overlays (63:88), dann `artHash`/`artColor` wie oben.
 - Distanz = Hamming(256 Bit) + 0,25 · (|ΔR|+|ΔG|+|ΔB|)/8 (gerundet).
 - Treffer, wenn beste Distanz ≤ `MATCH_MAX` (Start: 90, bis 0.1.6: 70) und Abstand zur zweitbesten **anderen Illustration**
-  ≥ `MATCH_MARGIN` (Start: 12). Produkte mit identischem Hash (Nachdrucke) gelten als dieselbe
+  ≥ `MATCH_MARGIN` (Start: 8, bis 0.1.7: 12). Produkte mit identischem Hash (Nachdrucke) gelten als dieselbe
   Illustration und laufen in die vorhandene Set-Auswahl.
 - Stabilität wie bisher: gleiche Illustration in 2 aufeinanderfolgenden Frames.
 - Name-OCR (englisch) bleibt als Zusatz: stimmt der OCR-Name mit einem der Top-5-Bildtreffer überein
