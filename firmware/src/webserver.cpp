@@ -41,8 +41,8 @@ BearSSL::PrivateKey* g_privateKey = nullptr;
 // Time of the last HTTPS request, for the health checks (health.cpp).
 uint32_t g_lastRequestMs = 0;
 
-// Headers the OTA handler reads with header(); they must be collected before begin().
-const char* kCollectedHeaders[] = {"X-OTA-Pass", "Content-Length"};
+// Headers read with header() (OTA upload, asset ETag); they must be collected before begin().
+const char* kCollectedHeaders[] = {"X-OTA-Pass", "Content-Length", "If-None-Match"};
 
 String currentIp() {
     return WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String();
@@ -112,9 +112,18 @@ CardView makeCardView(JsonDocument& scan) {
 constexpr size_t kAssetChunk = 1024;
 constexpr uint32_t kAssetStallMs = 10000;
 
+// The assets only change with a new build, so the build time is the ETag. With
+// "no-cache" the browser asks every time and gets a 304 without a body.
+const char kAssetEtag[] = "\"" FW_VERSION "-" __DATE__ " " __TIME__ "\"";
+
 void sendAsset(const WebAsset& asset) {
-    https.sendHeader("Content-Encoding", "gzip");
+    https.sendHeader("ETag", kAssetEtag);
     https.sendHeader("Cache-Control", "no-cache");
+    if (https.header("If-None-Match") == kAssetEtag) {
+        https.send(304);
+        return;
+    }
+    https.sendHeader("Content-Encoding", "gzip");
     https.setContentLength(asset.length);
     https.send(200, asset.mime, "");
 
