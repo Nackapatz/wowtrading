@@ -248,7 +248,7 @@ async function main() {
   const testImage = (pid, opts = {}) => page.evaluate(([u, o]) => window.__wow.testImage(u, o), [typeof pid === 'number' ? img(pid) : pid, opts]);
   await check('Bild: hashes.json geladen, Nachdrucke zu Gruppen zusammengefasst, Infozeile', async () => {
     const st = await page.evaluate(() => window.__wow.artState());
-    assert.deepEqual(st, { groups: 24, products: 28, imgMax: 70 });
+    assert.deepEqual(st, { groups: 24, products: 28, imgMax: 90 });
     assert.match(await page.textContent('#dataInfo'), /Erkennung: Set\+Nummer, Werte, Bild \(28\), Name/);
   });
   await check('Bild: artHash im Browser identisch zu Python (hashes.json)', async () => {
@@ -345,7 +345,7 @@ async function main() {
     assert.ok(r2.ok, 'Toleranz 110: ' + JSON.stringify(r2.best));
     assert.equal(r.ok, r.best.d <= 40 && r.margin >= 12, 'Grenze 40 wird angewandt');
     await page.click('#calReset');
-    assert.equal(await page.inputValue('#calImgS'), '70');
+    assert.equal(await page.inputValue('#calImgS'), '90');
     await tab(page, 'scan');
   });
 

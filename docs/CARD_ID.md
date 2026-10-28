@@ -98,7 +98,7 @@ Punkte je Kandidat:
 | Gesamtzahl passt | +10 |
 | je übereinstimmender Wert (Kosten nicht bei Helden; Angriff/Leben nur bei Verbündeten) | +10 |
 | je widersprechender Wert | −30 |
-| Bildtreffer (Distanz d ≤ Toleranz) | + max(0, 30 − d/3) |
+| Bildtreffer (Distanz d ≤ Toleranz) | bester: +30 bei Abstand ≥ 12, sonst +10; weitere: + max(0, 10 − (d − bestes d)) |
 | gelernter deutscher Name | +40 |
 | englischer Name ≥ 0,8 | +20 |
 

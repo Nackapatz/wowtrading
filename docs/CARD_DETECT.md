@@ -236,3 +236,14 @@ Offen:
   herunterskaliert. Das ist nicht gemessen.
 - Blitz: Die Unterstützung auf Android-Chrome ist nicht am Gerät geprüft, nur mit dem Spy. Auf iPhone-Safari fehlt
   die Lampensteuerung nach Kenntnisstand, das ist nicht geprüft.
+
+## Anpassungen nach dem Erkennungs-Log (Firmware 0.1.7)
+
+Das Erkennungs-Log (`/api/log`) vom 28.10. zeigte bei echten Scans:
+- Die Wartezeit bis zum Foto lag zwischen 1 und 22 s, ohne ein einziges unscharfes Foto. „Ruhig“ heißt deshalb jetzt 2 Treffer in Folge mit höchstens 4 % Bewegung statt 3 Treffern mit 2 %. Die Schärfeprüfung bleibt.
+- Das schmale Nummernband traf bei leicht versetztem Rand die Flavor-Zeile. Jetzt wird ein hohes Band (y 0,895–0,99) mehrzeilig gelesen (PSM 6), und das Muster „Wort 123/456“ wird im ganzen Text gesucht.
+- Verlesene Set-Wörter wie „DARKARORTALS“: Passt kein Wort mit höchstens 2 Fehlern, entscheiden die Gesamtzahl und unter mehreren Sets mit dieser Gesamtzahl die Buchstabenpaar-Ähnlichkeit. Ein sicheres Wort (höchstens 1 Fehler, mindestens 5 Buchstaben) schlägt eine verlesene Gesamtzahl.
+- Quests und Orte haben keine Kostenzahl. Die OCR las dort Grafik als Ziffer, und die richtige Karte bekam −30. Kosten werden bei Helden, Quests und Orten nicht verglichen.
+- Die Bilderkennung hatte bei Kamerafotos die richtige Karte vorne, mit Distanz 79–87 und Abstand 13–19 zur nächsten Illustration. Die Grenze 70 verwarf diese Treffer. Der Grenzwert `MATCH_MAX` ist jetzt 90. Gespeicherte Werte aus älteren Versionen werden einmalig ersetzt (`imgV` 2). Zufallstreffer lagen bei d 97/98 mit Abstand 2–4 und bleiben ausgeschlossen.
+- Bildpunkte richten sich nach dem Abstand statt nach der absoluten Distanz. Der beste Treffer erhält +30 bei einem Abstand von mindestens 12, sonst +10. Weitere Treffer erhalten max(0, 10 − (d − bestes d)).
+- Der Abzug für einen widersprechenden Wert bleibt bei −30. Mit −15 würde eine exakt gelesene falsche Nummer mit einem falschen Wert eine korrigierte Ziffer mit drei passenden Werten nicht mehr sicher schlagen (Test „153 statt 163“).

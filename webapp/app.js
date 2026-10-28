@@ -36,11 +36,15 @@ const EURO_COMMA = new Set(['EUR', 'CHF', 'PLN', 'CZK', 'SEK', 'DKK', 'NOK', 'HU
 const PT_LABEL = { market: 'Marktpreis', low: 'Tiefstpreis', mid: 'Mittelpreis' };
 const PT_IDX = { market: 0, low: 1, mid: 2 };
 const PT_ORDER = ['market', 'mid', 'low'];
-const MATCH_MAX = 70;      // Bild: Start-Grenzwert der Distanz (docs/IMAGE_MATCH.md), per „Bild-Toleranz“ einstellbar
+const MATCH_MAX = 90;      // Bild: Start-Grenzwert der Distanz (docs/IMAGE_MATCH.md), per „Bild-Toleranz“ einstellbar
+const IMG_V = 2;           // Version des Grenzwerts: gespeicherte Werte älterer Versionen (70) verfallen
 const MATCH_MARGIN = 12;   // Bild: Mindestabstand zur nächstbesten anderen Illustration
 const SHARP_MIN = 60;      // Foto: Schärfe-Grenze (Laplace-Varianz, 400×558), per „Schärfe-Grenze“ einstellbar
 const HI_W = 800, HI_H = 1116;   // Foto: entzerrte Karte für die OCR (Bildabgleich nutzt 400×558)
 const DET_W = 240, DET_MS = 150; // Erkennung: Breite des Suchbildes, Takt in ms
+// Ruhig: STEADY_N Treffer in Folge, Ecken bewegen sich höchstens STEADY_TOL der Kartenbreite. Echte Logs: mit 3 Treffern
+// und 2 % wartete die App bei Handhaltung bis zu 22 s, ohne dass ein Foto unscharf war (die Schärfeprüfung bleibt).
+const STEADY_N = 2, STEADY_TOL = 0.04;
 const RARITY = { C: 'Common', U: 'Uncommon', R: 'Rare', E: 'Epic' }; // andere Codes roh anzeigen, nicht raten
 const rarityName = (r) => RARITY[r] || (r == null ? '' : String(r));
 const setName = (s, sc) => s || sc || '';
@@ -74,11 +78,11 @@ const CAL_REGS = ['name', 'strip', 'cost', 'atk', 'hp'];
 function loadCal() {
   const c = lsGet(LS_CAL) || {};
   const cl = (v) => Math.min(10, Math.max(-10, Math.round(Number(v) || 0)));
-  const img = Number(c.imgMax), o = c.off || { name: [0, c.nameOff], strip: [0, c.numOff] };   // altes Format übernehmen
+  const img = c.imgV === IMG_V ? Number(c.imgMax) : NaN, o = c.off || { name: [0, c.nameOff], strip: [0, c.numOff] };   // altes Format übernehmen
   const off = {};
   for (const r of CAL_REGS) off[r] = [cl(o[r] && o[r][0]), cl(o[r] && o[r][1])];
   const sh = Number(c.sharpMin);
-  return { off, debug: !!c.debug, log: c.log !== false, imgMax: img >= 40 && img <= 110 ? Math.round(img) : MATCH_MAX,
+  return { off, debug: !!c.debug, log: c.log !== false, imgV: IMG_V, imgMax: img >= 40 && img <= 110 ? Math.round(img) : MATCH_MAX,
     sharpMin: sh >= 10 && sh <= 200 ? Math.round(sh) : SHARP_MIN };
 }
 function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* Speicher gesperrt: egal */ } }
@@ -556,7 +560,9 @@ function ocrUsable(lang = 'eng') {
 const AZ = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const REG = {
   name: { l: 'Name', x: 0.18, y: 0.025, w: 0.64, h: 0.065, lang: 'deu', psm: '7', wl: '', tw: 900 },
-  strip: { l: 'Nummer', x: 0.18, y: 0.925, w: 0.55, h: 0.05, lang: 'eng', psm: '7', wl: AZ + AZ.toLowerCase() + '0123456789/ ', tw: 900 },
+  // Nummernleiste: hohes Band (mehrzeilig gelesen), das Muster „Wort 123/456“ wird im ganzen Text gesucht.
+  // Echte Fotos: bei leicht versetztem Rand traf ein schmales Band die Flavor-Zeile darüber.
+  strip: { l: 'Nummer', x: 0.16, y: 0.895, w: 0.60, h: 0.095, lang: 'eng', psm: '6', wl: AZ + AZ.toLowerCase() + '0123456789/ ', tw: 900 },
   cost: { l: 'Kosten', x: 0.07, y: 0.025, w: 0.16, h: 0.10, lang: 'eng', psm: '10', wl: '0123456789', tw: 120 },
   atk: { l: 'Angriff', x: 0.05, y: 0.86, w: 0.16, h: 0.11, lang: 'eng', psm: '10', wl: '0123456789', tw: 120 },
   hp: { l: 'Leben', x: 0.83, y: 0.86, w: 0.15, h: 0.11, lang: 'eng', psm: '10', wl: '0123456789', tw: 120 },
@@ -674,16 +680,32 @@ function parseStrip(t) {
   const m = /([A-Za-z]{3,})?\s*(\d{1,3})\s*\/\s*(\d{2,3})/.exec(String(t || ''));
   return m ? { word: m[1] || '', num: +m[2], tot: +m[3] } : null;
 }
-// Set-Wort unscharf (Levenshtein ≤ 2), ohne Treffer über die Gesamtzahl
+// Ähnlichkeit zweier Wörter über gemeinsame Buchstabenpaare (Dice), 0..1
+function dice(a, b) {
+  const pairs = (t) => { const m = new Map(); for (let i = 0; i < t.length - 1; i++) { const p = t.slice(i, i + 2); m.set(p, (m.get(p) || 0) + 1); } return m; };
+  const A = pairs(a), B = pairs(b);
+  let n = 0;
+  for (const [p, c] of A) n += Math.min(c, B.get(p) || 0);
+  return a.length + b.length > 2 ? 2 * n / (a.length + b.length - 2) : 0;
+}
+/* Sets zur gelesenen Nummernleiste: Set-Wort unscharf (Levenshtein ≤ 2) und Gesamtzahl.
+ * Wort und Gesamtzahl passen → diese Sets. Sonst ein sicheres Wort (≤ 1 Fehler, ≥ 5 Buchstaben) → diese Sets
+ * (Gesamtzahl verlesen). Sonst die Sets mit passender Gesamtzahl, bei mehreren das ähnlichste Wort
+ * (z.B. „DARKARORTALS“ → Dark Portal). Sonst die Sets mit ähnlichem Wort. */
 function findSets(st) {
   const L = S.idx.setList, w = norm(st.word).replace(/ /g, '');
-  let best = 3, out = [];
-  if (w.length >= 3) for (const s of L) {
-    if (!s.w) continue;
-    const d = Math.min(lev(w, s.w, 2), s.w2 && s.w2.length >= 4 ? lev(w, s.w2, 2) : 9);   // mehrteilige Set-Wörter: letztes Wort reicht
-    if (d < best) { best = d; out = [s]; } else if (d === best) out.push(s);
+  const dist = (s) => (w.length >= 3 && s.w ? Math.min(lev(w, s.w, 2), s.w2 && s.w2.length >= 4 ? lev(w, s.w2, 2) : 9) : 9);
+  const near = L.filter((s) => dist(s) <= 2), byTot = L.filter((s) => s.tot === st.tot);
+  const both = near.filter((s) => s.tot === st.tot);
+  if (both.length) return both;
+  const strong = w.length >= 5 ? near.filter((s) => dist(s) <= 1) : [];
+  if (strong.length) return strong;
+  if (byTot.length > 1 && w.length >= 4) {
+    const sim = byTot.map((s) => Math.max(dice(w, s.w || ''), s.w2 ? dice(w, s.w2) : 0));
+    const best = Math.max(...sim);
+    if (best >= 0.3) return byTot.filter((s, i) => sim[i] === best);
   }
-  return out.length ? out : L.filter((s) => s.tot === st.tot);
+  return byTot.length ? byTot : near;
 }
 const statNum = (t) => { const m = /\d{1,2}/.exec(t || ''); return m ? +m[0] : null; };
 const cleanDe = (t) => String(t || '').replace(/[^A-Za-zÄÖÜäöüß' -]+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -713,7 +735,8 @@ function learn(de, k) {
 }
 
 /* Punkte je Kandidat: Nr exakt 60 (Ziffernkorrektur 40), Gesamtzahl +10, Wert +10/−30,
- * Bild +max(0, 30 − d/3), gelernter Name +40, englischer Name ≥ 0,8 +20. */
+ * Bild: bester Treffer +30 bei Abstand ≥ MATCH_MARGIN, sonst +10; weitere +max(0, 10 − (d − bestes d)),
+ * gelernter Name +40, englischer Name ≥ 0,8 +20. */
 function score(res, raw) {
   const C = new Map(), idx = S.idx, flt = S.setFilter;
   const add = (card, pts, tag) => {
@@ -730,8 +753,11 @@ function score(res, raw) {
   }
   if (res) for (const t of res.top) {
     if (t.d > S.cal.imgMax) continue;
+    // Kamerabilder liegen oft bei d 80–90; entscheidend ist der Abstand zur nächsten Illustration
+    const first = t === res.top[0];
+    const pts = first ? (res.margin == null || res.margin >= MATCH_MARGIN ? 30 : 10) : Math.max(0, 10 - (t.d - res.top[0].d));
     for (const card of t.cards) {
-      const c = add(card, Math.max(0, 30 - t.d / 3), 'Bild');
+      const c = add(card, pts, 'Bild');
       if (c) { c.d = t.d; c.imgSure = res.ok && t === res.top[0] && t.cards.every((x) => x === card || sameCard(x, card)); }
     }
   }
@@ -744,11 +770,12 @@ function score(res, raw) {
   const sv = { cost: statNum(raw.cost), atk: statNum(raw.atk), hp: statNum(raw.hp) };
   for (const c of C.values()) {
     if (st && c.card.tot === st.tot) { c.pts += 10; c.sig.push('Ges'); }
-    // Werte wie in SpectralKitten (0 = oft nicht aufgedruckt): Angriff/Leben nur bei Verbündeten, Kosten nicht bei Helden
-    const t = c.card.t || '', ally = !t || /ally/i.test(t);
+    // Werte wie in SpectralKitten (0 = oft nicht aufgedruckt): Angriff/Leben nur bei Verbündeten,
+    // Kosten nicht bei Helden, Quests und Orten (dort steht keine Kostenzahl, die OCR liest dann Grafik als Ziffer)
+    const t = c.card.t || '', ally = !t || /ally/i.test(t), noCost = /hero|quest|location/i.test(t);
     for (const f in sv) {
       const v = sv[f], cv = c.card[f];
-      if (v == null || cv == null || (f === 'cost' ? /hero/i.test(t) : !ally)) continue;
+      if (v == null || cv == null || (f === 'cost' ? noCost : !ally)) continue;
       if (v === cv) { c.pts += 10; c.sig.push(f); } else { c.pts -= 30; c.contra = true; c.sig.push('!' + f); }
     }
   }
@@ -917,8 +944,8 @@ function renderDbg() {
 }
 
 /* Erkennung im Kamerabild (docs/CARD_DETECT.md): search → steady → shot → wait-remove.
- * Alle 150 ms wird der Kartenrand gesucht (tick). Drei ruhige Treffer in Folge (Ecken bewegen sich
- * höchstens 2 % der Kartenbreite) → Foto. Nach Erfassen oder Vorschlägen (wait-remove) erst weiter, wenn
+ * Alle 150 ms wird der Kartenrand gesucht (tick). STEADY_N ruhige Treffer in Folge (Ecken bewegen sich
+ * höchstens STEADY_TOL der Kartenbreite) → Foto. Nach Erfassen oder Vorschlägen (wait-remove) erst weiter, wenn
  * zwei Erkennungen in Folge nichts finden oder sich die Ecken um mehr als 15 % verschieben. */
 function newCd() { return { state: 'search', stable: 0, ref: null, last: null, lockC: null, score: null, t0: null, blur: 0 }; }
 const cardW = (c) => (Math.hypot(c[1][0] - c[0][0], c[1][1] - c[0][1]) + Math.hypot(c[2][0] - c[3][0], c[2][1] - c[3][1])) / 2;
@@ -1109,7 +1136,7 @@ async function shotAt(corners) {
     const cands = e.m.ranked.slice(0, 3).map((c) => c.card), raws = [e.raw];
     for (let i = 0; i < 2 && !m.sure; i++) {
       const d = detect();
-      if (!d || moved(d.corners, corners) > 0.02 * cardW(corners)) break;   // Karte liegt nicht mehr ruhig
+      if (!d || moved(d.corners, corners) > STEADY_TOL * cardW(corners)) break;   // Karte liegt nicht mehr ruhig
       const s = takeShot(d.corners);
       if (!s || s.sharp < S.cal.sharpMin) continue;
       raws.push(await readAll(s.hi));
@@ -1149,9 +1176,9 @@ async function tick() {
   }
   if (!det) { S.cd.state = 'search'; S.cd.stable = 0; S.cd.ref = null; S.cd.t0 = null; S.cd.blur = 0; setLive('Karte in den Rahmen legen …'); return; }
   if (S.cd.t0 == null) S.cd.t0 = performance.now();   // Log: Zeit von der ersten Erkennung bis zum Foto
-  S.cd.stable = S.cd.ref && moved(det.corners, S.cd.ref) <= 0.02 * cardW(det.corners) ? S.cd.stable + 1 : 1;
+  S.cd.stable = S.cd.ref && moved(det.corners, S.cd.ref) <= STEADY_TOL * cardW(det.corners) ? S.cd.stable + 1 : 1;
   S.cd.ref = det.corners;
-  if (S.cd.stable < 3) { S.cd.state = 'search'; setLive('Karte erkannt – ruhig halten …'); return; }
+  if (S.cd.stable < STEADY_N) { S.cd.state = 'search'; setLive('Karte erkannt – ruhig halten …'); return; }
   S.cd.state = 'steady';
   await shotAt(det.corners);
 }
