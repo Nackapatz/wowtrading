@@ -442,6 +442,9 @@ async function main() {
     assert.ok(c, JSON.stringify(r.cand));
     assert.equal(c.pts, 30); assert.equal(c.sig, 'Nr?');
     assert.equal(r.sure, false);
+    const r3 = await frame({ strip: 'A RUBETRAYER153// 264' }, { feed: false });
+    assert.equal(r3.cand[0] && r3.cand[0].k, 'sotb-153', '„//“ mit Leerzeichen: ' + JSON.stringify(r3.cand));
+    assert.match(r3.cand[0].sig, /^Nr Ges/);
     const r2 = await frame({ strip: 'XQZWVK15314264' }, { feed: false });
     assert.equal(r2.cand.length, 0, 'ohne Set-Wort kein Kandidat');
   });

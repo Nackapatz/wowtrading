@@ -693,11 +693,11 @@ function numVariants(n) {
   return out;
 }
 function parseStrip(t) {
-  const m = /([A-Za-z]{3,})?\s*(\d{1,3})\s*\/\s*(\d{2,3})/.exec(String(t || ''));
+  const m = /([A-Za-z]{3,})?\s*(\d{1,3})\s*\/{1,2}\s*(\d{2,3})/.exec(String(t || ''));   // „246// 264“ (Log)
   if (m) return { word: m[1] || '', num: +m[2], tot: +m[3] };
   // Ohne „/“ (OCR liest ihn als 1, T, L …, z.B. „BEIRAVER13514268“, „RBERRAYER135T 263“): unsicher (loose),
   // zählt nur bei einem Set-Wort mit höchstens 2 Fehlern und nur als „Nr?“
-  const l = /([A-Za-z]{5,})\s?(\d{1,3})[^\d]{0,2}(\d{2,3})/.exec(String(t || ''));
+  const l = /([A-Za-z]{5,})\s?(\d{1,3})[^\d]{0,3}(\d{2,3})/.exec(String(t || ''));
   return l ? { word: l[1], num: +l[2], tot: +l[3], loose: true } : null;
 }
 const strictStrip = (t) => { const st = parseStrip(t); return !!st && !st.loose; };
