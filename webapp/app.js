@@ -705,11 +705,17 @@ function parseStrip(t) {
     // Schrägstrich als 1 oder 7 mitgelesen: „1441/264“ → 144, „2037/264“ → 203 (nie das Ende einer langen Ziffernfolge nehmen)
     if ((a.length === 4 || +a > +b) && /[17]$/.test(a)) a = a.slice(0, -1);
     // sonst vierstellig: erste Ziffer weglassen, aber nur unsicher („Nr~“)
-    const glued = a.length === 4;
+    let glued = a.length === 4, alt = null;
     if (glued) a = a.slice(1);
+    // einstellige Nummer direkt hinter Buchstaben, die wie Ziffern aussehen: „RZEROTHIZS 4/361“ war 254 → beides nur „Nr~“
+    const dl = a.length === 1 && m[1] && /([ZSOB]{1,2})$/.exec(m[1]);
+    if (dl) {
+      const v = +(dl[1].replace(/Z/g, '2').replace(/S/g, '5').replace(/O/g, '0').replace(/B/g, '8') + a);
+      if (v <= +b) { glued = true; alt = v; }
+    }
     // Flavor-Text daneben (≥ 2 Wörter ab 4 Buchstaben): passt kein Set-Wort, zählt die Nummer nur unsicher (Log: „…Brenne… 39/264“)
     const flavor = (String(t).match(/[A-Za-z]{4,}/g) || []).length >= 2;
-    if (+a >= 1 && +a <= +b) return { word: m[1] || '', num: +a, tot: +b, flavor, glued };
+    if (+a >= 1 && +a <= +b) return { word: m[1] || '', num: +a, tot: +b, flavor, glued, alt };
   }
   // Ohne „/“ (OCR liest ihn als 1, T, L …, z.B. „BEIRAVER13514268“, „RBERRAYER135T 263“): unsicher (loose),
   // zählt nur bei einem Set-Wort mit höchstens 2 Fehlern und nur als „Nr?“
@@ -763,7 +769,7 @@ function findSets(st) {
 const statLike = (v, cv) => (v === 7 && cv === 1) || (v === 1 && cv === 7) || (v === 11 && cv === 1) || (v === 1 && cv === 11);
 // Zweistellige Lesungen wie „52“ (Wert 2) oder „25“ sind fast immer Grafik + Ziffer: über 12 → letzte Ziffer
 const statNum = (t) => { const m = /\d{1,2}/.exec(t || ''); if (!m) return null; const v = +m[0]; return v > 12 ? v % 10 : v; };
-const cleanDe = (t) => String(t || '').replace(/[^A-Za-zÄÖÜäöüß' -]+/g, ' ').replace(/\s+/g, ' ').trim();
+const cleanDe = (t) => String(t || '').replace(/[^A-Za-zÄÖÜäöüß'’ -]+/g, ' ').replace(/\s+/g, ' ').trim();
 // Gleiche Karte, anderes Produkt: gleiches Set, gleiche Nummer, gleicher Grundname
 const sameCard = (a, b) => a.s === b.s && numStr(a) != null && numStr(a) === numStr(b) && baseKey(a) === baseKey(b);
 const variantsOf = (card) => (S.idx ? S.idx.cards.filter((c) => c !== card && sameCard(c, card)) : []);
@@ -794,7 +800,7 @@ function tokenIndex() {
   if (S.tokIdx && S.tokIdx.idx === S.idx) return S.tokIdx.map;
   const map = new Map();
   S.idx.cards.forEach((c, i) => {
-    for (const t of new Set(norm(stripSuffix(c.n)).split(/[^a-z]+/))) if (t.length >= 5) { if (!map.has(t)) map.set(t, []); map.get(t).push(i); }
+    for (const t of new Set(norm(stripSuffix(c.n).replace(APOS, '')).split(/[^a-z]+/))) if (t.length >= 5) { if (!map.has(t)) map.set(t, []); map.get(t).push(i); }
   });
   for (const [t, a] of map) if (a.length > 12) map.delete(t);
   // verschiedene Namen je Wort: Nachdrucke derselben Karte („Valanos“ in 3 Sets) zählen einmal
@@ -802,7 +808,9 @@ function tokenIndex() {
   S.tokIdx = { idx: S.idx, map, names };
   return map;
 }
-const nameTokens = (de) => [...new Set(norm(de).split(/[^a-z]+/).filter((t) => t.length >= 5))];
+// Apostroph gehört zum Namen: „Vesh'ral“ → veshral (sonst zwei zu kurze Wörter, Log: Vesh'ral als Warlord Goretooth erfasst)
+const APOS = /['’`´]/g;
+const nameTokens = (de) => [...new Set(norm(String(de).replace(APOS, '')).split(/[^a-z]+/).filter((t) => t.length >= 5))];
 
 // Gelöschter Scan war eine Fehl-Erfassung: den dabei gelernten deutschen Namen wieder vergessen,
 // solange keine andere Erfassung derselben Karte mit diesem Namen übrig ist. Gibt den Namen zurück.
@@ -834,7 +842,7 @@ function score(res, raw) {
     if (st.loose) { for (const i of idx.byNum.get(s.key + '|' + st.num) || []) add(idx.cards[i], 25, 'Nr?'); continue; }   // unter einem Bildtreffer (30)
     const weak = (st.flavor && !st.byWord) || st.glued;
     for (const i of idx.byNum.get(s.key + '|' + st.num) || []) add(idx.cards[i], weak ? 40 : 60, weak ? 'Nr~' : 'Nr');
-    for (const v of numVariants(st.num)) for (const i of idx.byNum.get(s.key + '|' + v) || []) add(idx.cards[i], 40, 'Nr~');
+    for (const v of [...numVariants(st.num), ...(st.alt ? [st.alt] : [])]) for (const i of idx.byNum.get(s.key + '|' + v) || []) add(idx.cards[i], 40, 'Nr~');
   }
   if (res) for (const t of res.top) {
     if (t.d > S.cal.imgMax) continue;
