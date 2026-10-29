@@ -272,3 +272,9 @@ Mit 0.1.7 wurden die drei Quest-Karten jedes Mal über das Bild erfasst (Warteze
 - „246// 264“: doppelter Schrägstrich und bis zu drei Trennzeichen sind erlaubt.
 - Nachdrucke in anderen Sets (z.B. Starter-Deck) sind bei der letzten Erfassung als „Anderer Druck“ wählbar, weil der Bildabgleich oft das Original wählt.
 - Einstellungen: Laden wird zweimal wiederholt, ein leeres Feld „Daten-URL“ überschreibt die URL des Scanners nicht mehr.
+
+## Anpassungen nach dem fünften Log (Firmware 0.1.12)
+
+- Eigennamen: Deutsche Karten behalten Namen wie „Rokdar“, „Finkle“ oder „Sha'kar“. Wörter ab 5 Buchstaben aus den englischen Namen, die in höchstens 12 Karten vorkommen, bilden einen Index. Steht ein solches Wort im gelesenen deutschen Namen, gibt das +25 („Tok“). Zeigt der Eigenname auf eine andere Karte als den besten Kandidaten, wird nicht automatisch erfasst (Log: Rokdar gelesen, „Nr Ges“ aus Flavor-Text ergab Warmaul Champion). Eine Erfassung nur über die Nummer liest dafür vorher den Namen.
+- Nummer ohne „/“ und Bild zeigen auf dieselbe Karte (Bild-Abstand ≥ 8, kein Widerspruch): zwei unabhängige Hinweise, das erfasst („Nr?+Bild“, z.B. Dr. Boom! mit d 88 / 13 und „RBEFAAVER 250 264“).
+- Verlesene Set-Wörter ohne „/“: Sets mit Gesamtzahl ±10 und ähnlichem Wort (Buchstabenpaare ≥ 0,35, bei genau einem Set mit exakt dieser Gesamtzahl ≥ 0,2).

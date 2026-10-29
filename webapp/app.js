@@ -720,7 +720,13 @@ function findSets(st) {
   const dist = (s) => (w.length >= 3 && s.w ? Math.min(lev(w, s.w, 3), s.w2 && s.w2.length >= 4 ? lev(w, s.w2, 3) : 9) : 9);
   const near = L.filter((s) => dist(s) <= 2), byTot = L.filter((s) => s.tot === st.tot);
   // Ohne „/“: Set-Wort mit ≤ 2 Fehlern, oder ≤ 3 Fehler / Buchstabenpaar-Ähnlichkeit ≥ 0,45 bei passender Gesamtzahl
-  if (st.loose) return [...new Set([...near, ...byTot.filter((s) => dist(s) <= 3 || Math.max(dice(w, s.w || ''), s.w2 ? dice(w, s.w2) : 0) >= 0.45)])];
+  if (st.loose) {
+    // Ohne „/“: Set-Wort mit ≤ 2 Fehlern; sonst Gesamtzahl ±10 mit ähnlichem Wort (≤ 3 Fehler oder Buchstabenpaare ≥ 0,35),
+    // bei genau einem Set mit exakt dieser Gesamtzahl reicht 0,2 („RBEFAAVER 250 264“, „REBEERAVER 251 254“)
+    const sim = (s) => Math.max(dice(w, s.w || ''), s.w2 ? dice(w, s.w2) : 0);
+    const nearTot = L.filter((s) => s.tot && Math.abs(s.tot - st.tot) <= 10 && (dist(s) <= 3 || sim(s) >= (byTot.length === 1 && s.tot === st.tot ? 0.2 : 0.35)));
+    return [...new Set([...near, ...nearTot])];
+  }
   const both = near.filter((s) => s.tot === st.tot);
   if (both.length) return both;
   const strong = w.length >= 5 ? near.filter((s) => dist(s) <= 1) : [];
@@ -758,6 +764,20 @@ function learn(de, k) {
   S.learned[de] = k; S.learnN = null;
   lsSet(LS_LEARN, S.learned);
 }
+/* Eigennamen: deutsche Karten behalten Namen wie „Rokdar“, „Finkle“, „Sha'kar“. Wörter ab 5 Buchstaben aus den englischen
+ * Namen, die in höchstens 12 Karten vorkommen → Index; ein solches Wort im gelesenen deutschen Namen gibt +25 („Tok“). */
+function tokenIndex() {
+  if (S.tokIdx && S.tokIdx.idx === S.idx) return S.tokIdx.map;
+  const map = new Map();
+  S.idx.cards.forEach((c, i) => {
+    for (const t of new Set(norm(stripSuffix(c.n)).split(/[^a-z]+/))) if (t.length >= 5) { if (!map.has(t)) map.set(t, []); map.get(t).push(i); }
+  });
+  for (const [t, a] of map) if (a.length > 12) map.delete(t);
+  S.tokIdx = { idx: S.idx, map };
+  return map;
+}
+const nameTokens = (de) => [...new Set(norm(de).split(/[^a-z]+/).filter((t) => t.length >= 5))];
+
 // Gelöschter Scan war eine Fehl-Erfassung: den dabei gelernten deutschen Namen wieder vergessen,
 // solange keine andere Erfassung derselben Karte mit diesem Namen übrig ist. Gibt den Namen zurück.
 function unlearn(rec) {
@@ -804,6 +824,9 @@ function score(res, raw) {
     const k = learnedK(de), card = k && idx.byK.get(k);
     if (card) add(card, 40, 'DE');
     for (const r of matchName(de).ranked) if (r.score >= 0.8) for (const card of r.cards) add(card, 20, 'EN');
+    const tix = tokenIndex(), hit = new Set();
+    for (const t of nameTokens(de)) for (const i of tix.get(t) || []) hit.add(i);
+    if (hit.size && hit.size <= 12) for (const i of hit) add(idx.cards[i], 25, 'Tok');
   }
   const sv = { cost: statNum(raw.cost), atk: statNum(raw.atk), hp: statNum(raw.hp) };
   for (const c of C.values()) {
@@ -824,6 +847,8 @@ function score(res, raw) {
     const keys = new Set(stSets.map((x) => x.key));
     for (const c of C.values()) if (c.imgSure && !keys.has(c.card.si ?? c.card.s)) { c.imgSure = false; c.sig.push('!Set'); }
   }
+  // Nummer (unsicher) und Bild zeigen auf dieselbe Karte, Bild mit Abstand ≥ 8: zwei unabhängige Hinweise → eindeutig
+  for (const c of C.values()) if (c.sig.includes('Nr?') && c.mg != null && c.mg >= MATCH_MARGIN && !c.contra) { c.imgSure = true; c.sig.push('Nr?+Bild'); }
   let ranked = [...C.values()].sort((a, b) => b.pts - a.pts), top = ranked[0], others = ranked.slice(1);
   // Gleichstand Grundprodukt ↔ Variante derselben Karte („… (LOOT)“, gleiche Nummer): Grundprodukt wählen
   if (top) {
@@ -837,7 +862,9 @@ function score(res, raw) {
   }
   const lead = top ? top.pts - (others[0] ? others[0].pts : 0) : 0;
   // Erfassen: ≥ 70 Punkte und ≥ 20 Vorsprung; oder eindeutiger Bildtreffer (IMAGE_MATCH) ohne Widerspruch
-  const sure = !!top && ((top.pts >= CAP_PTS && lead >= CAP_LEAD) || (!!top.imgSure && !top.contra && lead > 0));
+  // Ein Eigenname im deutschen Namen zeigt auf eine andere Karte: nicht automatisch erfassen (Log 29.10.: Rokdar → Warmaul Champion)
+  const tokOther = !!top && !top.sig.includes('Tok') && ranked.some((x) => x !== top && x.sig.includes('Tok') && !sameCard(x.card, top.card));
+  const sure = !!top && !tokOther && ((top.pts >= CAP_PTS && lead >= CAP_LEAD) || (!!top.imgSure && !top.contra && lead > 0));
   return { ranked, sure, lead, st, de };
 }
 const sigText = (c) => `${c.sig.join(' ')} = ${Math.round(c.pts)}`;
@@ -870,9 +897,11 @@ async function evalCard(cv, src, inj) {
     if (m.sure && m.ranked[0].pts < CAP_PTS && m.ranked[0].d > WEAK_IMG_D && ocrUsable('eng')) { await read('strip'); m = score(res, raw); }
     if (!m.sure && ocrUsable('eng')) {
       if (raw.strip === undefined) { await read('strip'); m = score(res, raw); }
+      // Erfassung nur über die Nummer: zur Kontrolle den Namen lesen (Eigenname kann widersprechen)
+      if (m.sure && !m.ranked[0].sig.includes('Bild') && ocrUsable('deu')) { await read('name'); m = score(res, raw); }
       if (!m.sure) { await read('cost'); await read('atk'); await read('hp'); m = score(res, raw); }
     }
-    if (!m.sure && ocrUsable('deu')) { await read('name'); m = score(res, raw); }
+    if (!m.sure && ocrUsable('deu') && raw.name === undefined) { await read('name'); m = score(res, raw); }
   }
   return { res, raw, m, ms, ocrMs };
 }

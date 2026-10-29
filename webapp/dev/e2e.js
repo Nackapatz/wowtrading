@@ -367,7 +367,7 @@ async function main() {
     const before = await scanCount();
     const r = await frame(HULOK);
     assert.equal(r.cand[0].k, 'sotb-163');
-    assert.equal(r.cand[0].pts, 100, r.cand[0].sig);   // 60 + 10 + 3·10
+    assert.equal(r.cand[0].pts, 125, r.cand[0].sig);   // 60 + 10 + 3·10 + Eigenname „Hulok“ 25
     assert.equal(r.cand[1].k, 'p900032', 'Variante (LOOT) gleich gut, Grundprodukt gewählt');
     assert.equal(r.sure, true);
     assert.equal(await scanCount(), before + 1, 'eindeutig: ein Standbild erfasst');
@@ -382,7 +382,7 @@ async function main() {
     assert.equal(rec.set, 'Servants of the Betrayer');
     assert.deepEqual([rec.cost, rec.atk, rec.hp, rec.health], [2, 2, 2, 2]);
     assert.deepEqual([rec.type, rec.faction, rec.race, rec.cls], ['Ally', 'Horde', 'Tauren', 'Druid']);
-    assert.deepEqual(rec.matchInfo, { signals: ['Nr', 'Ges', 'cost', 'atk', 'hp', 'Basis'], score: 100, lead: 60 });   // vor Roke: 40 + 10 + 10 + 10 − 30
+    assert.deepEqual(rec.matchInfo, { signals: ['Nr', 'Tok', 'Ges', 'cost', 'atk', 'hp', 'Basis'], score: 125, lead: 85 });   // Eigenname „Hulok“ +25; vor Roke: 40 + 10 + 10 + 10 − 30
     assert.equal(rec.price, 0.23);                 // 0,25 USD · 0,92
     assert.deepEqual(await page.evaluate(() => window.__wow.learned()), { 'Hulok Wegbereiter': 'sotb-163' });
     assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('wowscan.learnedNames'))), { 'Hulok Wegbereiter': 'sotb-163' });
@@ -448,6 +448,13 @@ async function main() {
     const r2 = await frame({ strip: 'XQZWVK15314264' }, { feed: false });
     assert.equal(r2.cand.length, 0, 'ohne Set-Wort kein Kandidat');
   });
+  await check('Kombiniert: Eigenname im deutschen Namen widerspricht der Nummer → nur Vorschlag', async () => {
+    await unlock();
+    const r = await frame({ strip: 'BETRAYER 153/264', name: 'Der wilde Hound' }, { feed: false });
+    assert.equal(r.cand[0].k, 'sotb-153', JSON.stringify(r.cand));
+    assert.ok(r.cand.some((c) => /Tok/.test(c.sig) && c.name === 'Sample Storm Hound'), JSON.stringify(r.cand));
+    assert.equal(r.sure, false);
+  });
   await check('Kombiniert: OCR liest 153 statt 163 → die Werte korrigieren die Ziffer, Erfassung', async () => {
     await unlock();
     const before = await scanCount();
@@ -469,7 +476,7 @@ async function main() {
     const f = { strip: 'BETRAYER 153/264', cost: '2', atk: '2', hp: '2', name: 'Hulok Wegbereitcr' };   // OCR-Fehler im Namen
     const r = await frame(f, { feed: false });
     assert.equal(r.cand[0].k, 'sotb-163');
-    assert.equal(r.cand[0].pts, 120, r.cand[0].sig);   // 40 + 10 + 30 + 40
+    assert.equal(r.cand[0].pts, 145, r.cand[0].sig);   // 40 + 10 + 30 + 40 + Eigenname 25
     assert.match(r.cand[0].sig, /DE/);
     assert.equal(r.sure, true);
     await frame(f);
@@ -524,7 +531,7 @@ async function main() {
     const row = lines.find((l) => l.includes('Hulok Wegbereiter'));
     assert.ok(row, 'Zeile mit deutschem Namen');
     assert.match(row, /sotb-163/);
-    assert.match(row, /Nr Ges cost atk hp Basis( Variante)* = 100/);
+    assert.match(row, /Nr Tok Ges cost atk hp Basis( Variante)* = 125/);
     const js = JSON.parse(await page.evaluate(() => window.__wow.json()));
     assert.ok(js.scans.some((x) => x.nameDe === 'Hulok Wegbereiter' && x.key === 'sotb-163'));
   });
