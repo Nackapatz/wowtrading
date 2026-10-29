@@ -70,7 +70,10 @@ def inline_assets(html: str) -> str:
     """Replace the stylesheet and script tags with inline <style>/<script> blocks."""
     for tag, name, element in INLINED:
         if tag not in html:
-            continue  # placeholder page
+            if html == PLACEHOLDERS["index.html"]:
+                continue
+            # the served page would reference a file the firmware no longer serves
+            raise SystemExit("embed_web: %s not found in index.html, cannot inline %s" % (tag, name))
         text, _ = read_source(name)
         if ("</" + element) in text.lower():
             raise SystemExit("embed_web: %s contains </%s> and cannot be inlined" % (name, element))
