@@ -259,7 +259,16 @@ Mit 0.1.7 wurden die drei Quest-Karten jedes Mal über das Bild erfasst (Warteze
 
 ## Anpassungen nach dem dritten Log (Firmware 0.1.10)
 
-- Fehl-Erfassung „Skullflame Shield“ statt „Falana of the Glen“ nur über das Bild bei d 88 und Abstand 8. Ab d > 85 ist jetzt ein Abstand von 12 nötig (`MATCH_MARGIN_FAR`). Darunter bleibt 8, das deckt die echten Treffer Retainer's Blade (d 84/8) und Jessup Smythe (d 81/9) ab.
+- Fehl-Erfassung „Skullflame Shield“ statt „Falana of the Glen“ nur über das Bild bei d 88 und Abstand 8. Ab d > 85 war danach ein Abstand von 12 nötig (in 0.1.11 verschärft, siehe unten). Darunter bleibt 8, das deckt die echten Treffer Retainer's Blade (d 84/8) und Jessup Smythe (d 81/9) ab.
 - Die Fehl-Erfassung lernte „Falana aus dem Tal“ → Skullflame Shield. Namen werden nur noch gelernt, wenn Nummer, Name oder ein Bildtreffer mit Abstand ≥ 12 dafür spricht. Wird ein Scan gelöscht, vergisst die App den dabei gelernten Namen, solange keine andere Erfassung derselben Karte mit diesem Namen übrig ist.
 - Nummernleisten ohne „/“ („BEIRAVER13514268“, „RBERRAYER135T 263“) gelten als unsicher: nur bei einem Set-Wort mit höchstens 2 Fehlern (bei passender Gesamtzahl 3 Fehler oder Buchstabenpaar-Ähnlichkeit ≥ 0,45) und nur „Nr?“ mit 30 Punkten, ohne Gesamtzahl-Bonus. Allein löst das keine Erfassung aus.
 - Bei Falana lag die Hash-Distanz zum eigenen Bild in 10 von 11 Fotos bei 134 bis 155, also schlechter als zufällig (~128). Ursache offen (Spiegelung, falscher Rahmen oder andere Bildversion).
+
+## Anpassungen nach dem vierten Log (Firmware 0.1.11)
+
+- Zweite Fehl-Erfassung nur über das Bild: „Abomination Knuckles“ bei d 85 / Abstand 10 statt „The Ring of Blood: The Final Challenge“. Der nötige Abstand steigt jetzt in Stufen: 8 bis d 80, 12 bis d 85, 15 darüber. Echte Treffer in diesem Bereich (d 81–85 mit Abstand 8–11) werden damit zu Vorschlägen.
+- Ein reiner Bildtreffer mit d > 75 liest zur Kontrolle die Nummernleiste. Nennt sie höchstens 3 Sets und ist das Set des Bildtreffers nicht dabei, erfasst das Bild nicht allein („!Set“).
+- Eine Schärfe-Grenze für reine Bildtreffer wurde verworfen: Echte Erfassungen hatten Schärfe 140–430, genau wie der Fehltreffer (177).
+- „246// 264“: doppelter Schrägstrich und bis zu drei Trennzeichen sind erlaubt.
+- Nachdrucke in anderen Sets (z.B. Starter-Deck) sind bei der letzten Erfassung als „Anderer Druck“ wählbar, weil der Bildabgleich oft das Original wählt.
+- Einstellungen: Laden wird zweimal wiederholt, ein leeres Feld „Daten-URL“ überschreibt die URL des Scanners nicht mehr.

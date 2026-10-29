@@ -39,8 +39,9 @@ const PT_ORDER = ['market', 'mid', 'low'];
 const MATCH_MAX = 90;      // Bild: Start-Grenzwert der Distanz (docs/IMAGE_MATCH.md), per „Bild-Toleranz“ einstellbar
 const IMG_V = 2;           // Version des Grenzwerts: gespeicherte Werte älterer Versionen (70) verfallen
 const MATCH_MARGIN = 8;    // Bild: Mindestabstand zur nächstbesten anderen Illustration (Log: echte Treffer ≥ 8, Zufall ≤ 4)
-const MATCH_MARGIN_FAR = 12, MATCH_FAR_D = 85;   // ab d > 85 nötiger Abstand 12 (Log 29.10.: Fehltreffer bei d 88 / Abstand 8)
-const marginNeed = (d) => (d > MATCH_FAR_D ? MATCH_MARGIN_FAR : MATCH_MARGIN);
+const MATCH_MARGIN_FAR = 12;   // nötiger Abstand bei d > 80; bei d > 85: 15
+// Log 29.10.: Fehltreffer bei d 88 / Abstand 8 und d 85 / Abstand 10; echte Treffer darüber z.B. d 85 / 13, d 82 / 12
+const marginNeed = (d) => (d > 85 ? 15 : d > 80 ? MATCH_MARGIN_FAR : MATCH_MARGIN);
 const SHARP_MIN = 60;      // Foto: Schärfe-Grenze (Laplace-Varianz, 400×558), per „Schärfe-Grenze“ einstellbar
 const HI_W = 800, HI_H = 1116;   // Foto: entzerrte Karte für die OCR (Bildabgleich nutzt 400×558)
 const DET_W = 240, DET_MS = 150; // Erkennung: Breite des Suchbildes, Takt in ms
@@ -686,6 +687,7 @@ function matchArt(a) {
  * Kombinierte Erkennung (docs/CARD_ID.md): Set+Nummer, Gesamtzahl, Werte, Bild, Name
  * ============================================================ */
 const CAP_PTS = 70, CAP_LEAD = 20, SUGG_MIN = 20;
+const WEAK_IMG_D = 75;   // ab dieser Distanz liest ein reiner Bildtreffer zur Kontrolle die Nummernleiste
 const SWAP = { 5: '6', 6: '5', 1: '7', 7: '1', 0: '8', 8: '0' };   // häufige OCR-Verwechslungen
 function numVariants(n) {
   const s = String(n), out = [];
@@ -781,8 +783,8 @@ function score(res, raw) {
     c.pts += pts; c.sig.push(tag);
     return c;
   };
-  const st = parseStrip(raw.strip);
-  if (st) for (const s of findSets(st)) {
+  const st = parseStrip(raw.strip), stSets = st ? findSets(st) : [];
+  for (const s of stSets) {
     if (st.loose) { for (const i of idx.byNum.get(s.key + '|' + st.num) || []) add(idx.cards[i], 30, 'Nr?'); continue; }
     for (const i of idx.byNum.get(s.key + '|' + st.num) || []) add(idx.cards[i], 60, 'Nr');
     for (const v of numVariants(st.num)) for (const i of idx.byNum.get(s.key + '|' + v) || []) add(idx.cards[i], 40, 'Nr~');
@@ -815,6 +817,12 @@ function score(res, raw) {
       if (v === cv) { c.pts += 10; c.sig.push(f); } else if (f === 'cost') { c.pts -= 15; c.sig.push('!cost'); }   // Kostenkreis oft verlesen (Log)
       else { c.pts -= 30; c.contra = true; c.sig.push('!' + f); }
     }
+  }
+  // Nummernleiste nennt ein anderes Set (höchstens 3 Kandidaten-Sets): ein reiner Bildtreffer erfasst dann nicht allein
+  // (Log 29.10.: „PADIATORS 1196“ = Gladiators, Bild wählte Worldbreaker)
+  if (stSets.length && stSets.length <= 3) {
+    const keys = new Set(stSets.map((x) => x.key));
+    for (const c of C.values()) if (c.imgSure && !keys.has(c.card.si ?? c.card.s)) { c.imgSure = false; c.sig.push('!Set'); }
   }
   let ranked = [...C.values()].sort((a, b) => b.pts - a.pts), top = ranked[0], others = ranked.slice(1);
   // Gleichstand Grundprodukt ↔ Variante derselben Karte („… (LOOT)“, gleiche Nummer): Grundprodukt wählen
@@ -858,8 +866,10 @@ async function evalCard(cv, src, inj) {
       ocrMs[r] = Math.round(performance.now() - t);
     };
     m = score(res, raw);
+    // Knapper Bildtreffer (d > 75) allein: trotzdem die Nummernleiste lesen, sie kann ein anderes Set nennen (Veto)
+    if (m.sure && m.ranked[0].pts < CAP_PTS && m.ranked[0].d > WEAK_IMG_D && ocrUsable('eng')) { await read('strip'); m = score(res, raw); }
     if (!m.sure && ocrUsable('eng')) {
-      await read('strip'); m = score(res, raw);
+      if (raw.strip === undefined) { await read('strip'); m = score(res, raw); }
       if (!m.sure) { await read('cost'); await read('atk'); await read('hp'); m = score(res, raw); }
     }
     if (!m.sure && ocrUsable('deu')) { await read('name'); m = score(res, raw); }
