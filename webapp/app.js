@@ -38,7 +38,9 @@ const PT_IDX = { market: 0, low: 1, mid: 2 };
 const PT_ORDER = ['market', 'mid', 'low'];
 const MATCH_MAX = 90;      // Bild: Start-Grenzwert der Distanz (docs/IMAGE_MATCH.md), per „Bild-Toleranz“ einstellbar
 const IMG_V = 2;           // Version des Grenzwerts: gespeicherte Werte älterer Versionen (70) verfallen
-const MATCH_MARGIN = 8;    // Bild: Mindestabstand zur nächstbesten anderen Illustration (Log: echte Treffer ≥ 9, Zufall ≤ 4)
+const MATCH_MARGIN = 8;    // Bild: Mindestabstand zur nächstbesten anderen Illustration (Log: echte Treffer ≥ 8, Zufall ≤ 4)
+const MATCH_MARGIN_FAR = 12, MATCH_FAR_D = 85;   // ab d > 85 nötiger Abstand 12 (Log 29.10.: Fehltreffer bei d 88 / Abstand 8)
+const marginNeed = (d) => (d > MATCH_FAR_D ? MATCH_MARGIN_FAR : MATCH_MARGIN);
 const SHARP_MIN = 60;      // Foto: Schärfe-Grenze (Laplace-Varianz, 400×558), per „Schärfe-Grenze“ einstellbar
 const HI_W = 800, HI_H = 1116;   // Foto: entzerrte Karte für die OCR (Bildabgleich nutzt 400×558)
 const DET_W = 240, DET_MS = 150; // Erkennung: Breite des Suchbildes, Takt in ms
@@ -491,7 +493,7 @@ async function captureCard(card, opts = {}) {
     S.lastWanted = { id: rec.id, wanted: S.ui.priceType };
     S.scans.unshift(rec);
     S.lastId = rec.id;
-    if (rec.nameDe) learn(rec.nameDe, card.k);
+    if (rec.nameDe && opts.learn !== false) learn(rec.nameDe, card.k);
     setPill(true, `Scanner online · ${S.scans.length} Scans`);
     feedback(rec);
     renderAll();
@@ -674,7 +676,7 @@ function matchArt(a) {
   const best = top[0], second = top[1];
   const margin = best && second ? second.d - best.d : null;
   return {
-    ok: !!best && best.d <= S.cal.imgMax && (margin == null || margin >= MATCH_MARGIN),
+    ok: !!best && best.d <= S.cal.imgMax && (margin == null || margin >= marginNeed(best.d)),
     best: best ? best.d : null, margin,
     top: top.slice(0, 5).map((t) => ({ d: t.d, cards: t.mem.map((i) => cards[i]) })),
   };
@@ -692,8 +694,13 @@ function numVariants(n) {
 }
 function parseStrip(t) {
   const m = /([A-Za-z]{3,})?\s*(\d{1,3})\s*\/\s*(\d{2,3})/.exec(String(t || ''));
-  return m ? { word: m[1] || '', num: +m[2], tot: +m[3] } : null;
+  if (m) return { word: m[1] || '', num: +m[2], tot: +m[3] };
+  // Ohne „/“ (OCR liest ihn als 1, T, L …, z.B. „BEIRAVER13514268“, „RBERRAYER135T 263“): unsicher (loose),
+  // zählt nur bei einem Set-Wort mit höchstens 2 Fehlern und nur als „Nr?“
+  const l = /([A-Za-z]{5,})\s?(\d{1,3})[^\d]{0,2}(\d{2,3})/.exec(String(t || ''));
+  return l ? { word: l[1], num: +l[2], tot: +l[3], loose: true } : null;
 }
+const strictStrip = (t) => { const st = parseStrip(t); return !!st && !st.loose; };
 // Ähnlichkeit zweier Wörter über gemeinsame Buchstabenpaare (Dice), 0..1
 function dice(a, b) {
   const pairs = (t) => { const m = new Map(); for (let i = 0; i < t.length - 1; i++) { const p = t.slice(i, i + 2); m.set(p, (m.get(p) || 0) + 1); } return m; };
@@ -708,8 +715,10 @@ function dice(a, b) {
  * (z.B. „DARKARORTALS“ → Dark Portal). Sonst die Sets mit ähnlichem Wort. */
 function findSets(st) {
   const L = S.idx.setList, w = norm(st.word).replace(/ /g, '');
-  const dist = (s) => (w.length >= 3 && s.w ? Math.min(lev(w, s.w, 2), s.w2 && s.w2.length >= 4 ? lev(w, s.w2, 2) : 9) : 9);
+  const dist = (s) => (w.length >= 3 && s.w ? Math.min(lev(w, s.w, 3), s.w2 && s.w2.length >= 4 ? lev(w, s.w2, 3) : 9) : 9);
   const near = L.filter((s) => dist(s) <= 2), byTot = L.filter((s) => s.tot === st.tot);
+  // Ohne „/“: Set-Wort mit ≤ 2 Fehlern, oder ≤ 3 Fehler / Buchstabenpaar-Ähnlichkeit ≥ 0,45 bei passender Gesamtzahl
+  if (st.loose) return [...new Set([...near, ...byTot.filter((s) => dist(s) <= 3 || Math.max(dice(w, s.w || ''), s.w2 ? dice(w, s.w2) : 0) >= 0.45)])];
   const both = near.filter((s) => s.tot === st.tot);
   if (both.length) return both;
   const strong = w.length >= 5 ? near.filter((s) => dist(s) <= 1) : [];
@@ -747,6 +756,18 @@ function learn(de, k) {
   S.learned[de] = k; S.learnN = null;
   lsSet(LS_LEARN, S.learned);
 }
+// Gelöschter Scan war eine Fehl-Erfassung: den dabei gelernten deutschen Namen wieder vergessen,
+// solange keine andere Erfassung derselben Karte mit diesem Namen übrig ist. Gibt den Namen zurück.
+function unlearn(rec) {
+  if (!rec.nameDe || !rec.key) return null;
+  const n = norm(rec.nameDe);
+  if (S.scans.some((r) => r.key === rec.key && r.nameDe && norm(r.nameDe) === n)) return null;
+  const x = Object.keys(S.learned).find((de) => norm(de) === n && S.learned[de] === rec.key);
+  if (!x) return null;
+  delete S.learned[x]; S.learnN = null;
+  lsSet(LS_LEARN, S.learned);
+  return x;
+}
 
 /* Punkte je Kandidat: Nr exakt 60 (Ziffernkorrektur 40), Gesamtzahl +10, Wert +10/−30 (Kosten −15, ohne Sperre des Bildtreffers),
  * Bild: bester Treffer +30 bei Abstand ≥ MATCH_MARGIN, sonst +10; weitere +max(0, 10 − (d − bestes d)),
@@ -762,6 +783,7 @@ function score(res, raw) {
   };
   const st = parseStrip(raw.strip);
   if (st) for (const s of findSets(st)) {
+    if (st.loose) { for (const i of idx.byNum.get(s.key + '|' + st.num) || []) add(idx.cards[i], 30, 'Nr?'); continue; }
     for (const i of idx.byNum.get(s.key + '|' + st.num) || []) add(idx.cards[i], 60, 'Nr');
     for (const v of numVariants(st.num)) for (const i of idx.byNum.get(s.key + '|' + v) || []) add(idx.cards[i], 40, 'Nr~');
   }
@@ -769,10 +791,10 @@ function score(res, raw) {
     if (t.d > S.cal.imgMax) continue;
     // Kamerabilder liegen oft bei d 80–90; entscheidend ist der Abstand zur nächsten Illustration
     const first = t === res.top[0];
-    const pts = first ? (res.margin == null || res.margin >= MATCH_MARGIN ? 30 : 10) : Math.max(0, 10 - (t.d - res.top[0].d));
+    const pts = first ? (res.margin == null || res.margin >= marginNeed(t.d) ? 30 : 10) : Math.max(0, 10 - (t.d - res.top[0].d));
     for (const card of t.cards) {
       const c = add(card, pts, 'Bild');
-      if (c) { c.d = t.d; c.imgSure = res.ok && t === res.top[0] && t.cards.every((x) => x === card || sameCard(x, card)); }
+      if (c) { c.d = t.d; c.mg = first ? res.margin : null; c.imgSure = res.ok && t === res.top[0] && t.cards.every((x) => x === card || sameCard(x, card)); }
     }
   }
   const de = cleanDe(raw.name);
@@ -783,7 +805,7 @@ function score(res, raw) {
   }
   const sv = { cost: statNum(raw.cost), atk: statNum(raw.atk), hp: statNum(raw.hp) };
   for (const c of C.values()) {
-    if (st && c.card.tot === st.tot) { c.pts += 10; c.sig.push('Ges'); }
+    if (st && !st.loose && c.card.tot === st.tot) { c.pts += 10; c.sig.push('Ges'); }
     // Werte wie in SpectralKitten (0 = oft nicht aufgedruckt): Angriff/Leben nur bei Verbündeten,
     // Kosten nicht bei Helden, Quests und Orten (dort steht keine Kostenzahl, die OCR liest dann Grafik als Ziffer)
     const t = c.card.t || '', ally = !t || /ally/i.test(t), noCost = /hero|quest|location/i.test(t);
@@ -832,7 +854,7 @@ async function evalCard(cv, src, inj) {
     const read = async (r) => {
       const t = performance.now();
       raw[r] = (await ocrRegion(src, r)) || '';
-      if (r === 'strip' && !parseStrip(raw[r])) { const v = (await ocrRegion(src, r, STRIP_WIDE)) || ''; if (parseStrip(v)) raw[r] = v; }
+      if (r === 'strip' && !strictStrip(raw[r])) { const v = (await ocrRegion(src, r, STRIP_WIDE)) || ''; if (strictStrip(v) || (!parseStrip(raw[r]) && parseStrip(v))) raw[r] = v; }
       ocrMs[r] = Math.round(performance.now() - t);
     };
     m = score(res, raw);
@@ -891,7 +913,9 @@ async function decide(m, ctx) {
     setLive(`Erkannt: ${c.card.n}`);
     let de = ctx.nameDe;
     if (!de && ctx.readName) de = await ctx.readName().catch(() => null);
-    const rec = await captureCard(c.card, { nameDe: de, number: ctx.number, matchInfo: { signals: c.sig, score: Math.round(c.pts), lead: Math.round(m.lead) } });
+    // Namen nur lernen, wenn mehr als ein knapper Bildtreffer dafür spricht (Log 29.10.: Fehltreffer lernte einen falschen Namen)
+    const learnOk = c.sig.some((g) => g === 'Nr' || g === 'Nr~' || g === 'EN' || g === 'DE') || (c.mg == null ? c.sig.includes('Bild') : c.mg >= MATCH_MARGIN_FAR);
+    const rec = await captureCard(c.card, { nameDe: de, learn: learnOk, number: ctx.number, matchInfo: { signals: c.sig, score: Math.round(c.pts), lead: Math.round(m.lead) } });
     if (!rec) { S.locked = null; return 'failed'; }
     return 'captured';
   }
@@ -1376,8 +1400,9 @@ async function deleteScan(id) {
     await api('DELETE', `api/scans?id=${id}`);
     S.scans = S.scans.filter((r) => r.id !== id);
     if (S.lastId === id) S.lastId = null;
+    const unl = unlearn(rec);
     renderAll();
-    toast('Gelöscht.');
+    toast(unl ? `Gelöscht. Gelernter Name „${unl}“ entfernt.` : 'Gelöscht.');
   } catch (e) { toast(`Löschen fehlgeschlagen: ${e.message}`, 'err'); }
 }
 async function clearAll() {
@@ -1939,7 +1964,7 @@ window.__wow = {
   // Zusammenführen mehrerer Standbilder (Tests): raws = Rohtexte je Standbild, keys = Kandidaten (k)
   mergeRaw: (raws, keys) => mergeRaw(raws, keys.map((k) => S.idx.byK.get(k)).filter(Boolean)),
   learned: () => ({ ...S.learned }),
-  capture: async (k) => { const r = await captureCard(S.idx.byK.get(k)); return r ? r.id : null; },
+  capture: async (k, nameDe) => { const r = await captureCard(S.idx.byK.get(k), { nameDe }); return r ? r.id : null; },
   importLearned,
   regions: () => Object.fromEntries(REGS.map((r) => [r, regBox(r)])),
   setFilter(v) { const sel = $('#setFilter'); sel.value = v; sel.dispatchEvent(new Event('change')); },

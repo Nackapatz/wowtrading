@@ -256,3 +256,10 @@ Mit 0.1.7 wurden die drei Quest-Karten jedes Mal über das Bild erfasst (Warteze
 - Die Kosten-OCR (ein Zeichen im Kreis) las oft falsch, zum Beispiel 7 statt 4 und bei derselben Karte einmal 4, einmal 1, einmal 2. Falsche Kosten kosten −15 statt −30 und sperren einen eindeutigen Bildtreffer nicht mehr. Angriff und Leben bleiben bei −30.
 - Doppelte Erfassung derselben Karte im Abstand von 7 s: „entfernt“ gilt erst nach 4 Frames ohne Karte (600 ms) statt 2.
 - Ein Kartenbild ohne jeden Bildtreffer (Abstand 1 bis 4 bei allen Versuchen) bleibt auf Nummer und Name angewiesen.
+
+## Anpassungen nach dem dritten Log (Firmware 0.1.10)
+
+- Fehl-Erfassung „Skullflame Shield“ statt „Falana of the Glen“ nur über das Bild bei d 88 und Abstand 8. Ab d > 85 ist jetzt ein Abstand von 12 nötig (`MATCH_MARGIN_FAR`). Darunter bleibt 8, das deckt die echten Treffer Retainer's Blade (d 84/8) und Jessup Smythe (d 81/9) ab.
+- Die Fehl-Erfassung lernte „Falana aus dem Tal“ → Skullflame Shield. Namen werden nur noch gelernt, wenn Nummer, Name oder ein Bildtreffer mit Abstand ≥ 12 dafür spricht. Wird ein Scan gelöscht, vergisst die App den dabei gelernten Namen, solange keine andere Erfassung derselben Karte mit diesem Namen übrig ist.
+- Nummernleisten ohne „/“ („BEIRAVER13514268“, „RBERRAYER135T 263“) gelten als unsicher: nur bei einem Set-Wort mit höchstens 2 Fehlern (bei passender Gesamtzahl 3 Fehler oder Buchstabenpaar-Ähnlichkeit ≥ 0,45) und nur „Nr?“ mit 30 Punkten, ohne Gesamtzahl-Bonus. Allein löst das keine Erfassung aus.
+- Bei Falana lag die Hash-Distanz zum eigenen Bild in 10 von 11 Fotos bei 134 bis 155, also schlechter als zufällig (~128). Ursache offen (Spiegelung, falscher Rahmen oder andere Bildversion).

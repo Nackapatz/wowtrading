@@ -436,6 +436,15 @@ async function main() {
     assert.equal(id2, (await lastRec()).id);
     assert.equal((await lastRec()).cid, undefined, 'cid wird nicht gespeichert');
   });
+  await check('Kombiniert: Nummernleiste ohne „/“ zählt nur als unsicheres „Nr?“ bei passendem Set-Wort', async () => {
+    const r = await frame({ strip: 'BEIRAYER15314264' }, { feed: false });
+    const c = r.cand.find((x) => x.k === 'sotb-153');
+    assert.ok(c, JSON.stringify(r.cand));
+    assert.equal(c.pts, 30); assert.equal(c.sig, 'Nr?');
+    assert.equal(r.sure, false);
+    const r2 = await frame({ strip: 'XQZWVK15314264' }, { feed: false });
+    assert.equal(r2.cand.length, 0, 'ohne Set-Wort kein Kandidat');
+  });
   await check('Kombiniert: OCR liest 153 statt 163 → die Werte korrigieren die Ziffer, Erfassung', async () => {
     await unlock();
     const before = await scanCount();
@@ -716,6 +725,16 @@ async function main() {
     await page.locator('#scanList .item', { hasText: 'Sample Ember Warden' }).locator('[data-act="del"]').click();
     await page.waitForTimeout(250);
     assert.equal(await scanCount(), before - 1);
+  });
+  await check('Sammlung: Löschen einer Fehl-Erfassung vergisst den dabei gelernten Namen', async () => {
+    await page.evaluate(() => window.__wow.capture('sotb-153', 'Falscher Name'));
+    assert.equal((await page.evaluate(() => window.__wow.learned()))['Falscher Name'], 'sotb-153');
+    await tab(page, 'coll');
+    page.once('dialog', (d) => d.accept());
+    await page.locator('#scanList .item', { hasText: 'Roke the Ice Baron' }).first().locator('[data-act="del"]').click();
+    await page.waitForTimeout(250);
+    assert.equal((await page.evaluate(() => window.__wow.learned()))['Falscher Name'], undefined);
+    assert.equal((await page.evaluate(() => window.__wow.learned()))['Hulok Wegbereiter'], 'sotb-163', 'andere Namen bleiben');
   });
   await check('Export CSV: Semikolon, BOM, Dezimalkomma, konsistente Spaltenzahl', async () => {
     const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#btnCsv')]);
