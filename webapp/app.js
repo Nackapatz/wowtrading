@@ -687,6 +687,7 @@ function matchArt(a) {
  * Kombinierte Erkennung (docs/CARD_ID.md): Set+Nummer, Gesamtzahl, Werte, Bild, Name
  * ============================================================ */
 const CAP_PTS = 70, CAP_LEAD = 20, SUGG_MIN = 20;
+const AGREE_MG = 5;   // Bildabstand, der zusammen mit einem zweiten Hinweis zählt
 const WEAK_IMG_D = 75;   // ab dieser Distanz liest ein reiner Bildtreffer zur Kontrolle die Nummernleiste
 const SWAP = { 5: '6', 6: '5', 1: '7', 7: '1', 0: '8', 8: '0' };   // häufige OCR-Verwechslungen
 function numVariants(n) {
@@ -743,6 +744,8 @@ function findSets(st) {
   }
   return byTot.length ? byTot : near;
 }
+// Verwechslungen der Werte-OCR aus dem Log: 1 ↔ 7 (Kostenkreis), 1 ↔ 11 (Lebensschild)
+const statLike = (v, cv) => (v === 7 && cv === 1) || (v === 1 && cv === 7) || (v === 11 && cv === 1) || (v === 1 && cv === 11);
 const statNum = (t) => { const m = /\d{1,2}/.exec(t || ''); return m ? +m[0] : null; };
 const cleanDe = (t) => String(t || '').replace(/[^A-Za-zÄÖÜäöüß' -]+/g, ' ').replace(/\s+/g, ' ').trim();
 // Gleiche Karte, anderes Produkt: gleiches Set, gleiche Nummer, gleicher Grundname
@@ -830,7 +833,11 @@ function score(res, raw) {
     if (card) add(card, 40, 'DE');
     for (const r of matchName(de).ranked) if (r.score >= 0.8) for (const card of r.cards) add(card, 20, 'EN');
     const tix = tokenIndex(), hit = new Set();
-    for (const t of nameTokens(de)) for (const i of tix.get(t) || []) hit.add(i);
+    for (const t of nameTokens(de)) {
+      for (const i of tix.get(t) || []) hit.add(i);
+      // ab 6 Buchstaben unscharf (≤ 2 Fehler, gleicher Anfangsbuchstabe): „Krasise“ → Krosiss
+      if (t.length >= 6 && !tix.has(t)) for (const [k, a] of tix) if (k[0] === t[0] && Math.abs(k.length - t.length) <= 2 && k.length >= 6 && lev(t, k, 2) <= 2) for (const i of a) hit.add(i);
+    }
     if (hit.size && hit.size <= 12) for (const i of hit) add(idx.cards[i], 25, 'Tok');
   }
   const sv = { cost: statNum(raw.cost), atk: statNum(raw.atk), hp: statNum(raw.hp) };
@@ -842,8 +849,9 @@ function score(res, raw) {
     for (const f in sv) {
       const v = sv[f], cv = c.card[f];
       if (v == null || cv == null || (f === 'cost' ? noCost : !ally)) continue;
-      if (v === cv) { c.pts += 10; c.sig.push(f); } else if (f === 'cost') { c.pts -= 15; c.sig.push('!cost'); }   // Kostenkreis oft verlesen (Log)
-      else { c.pts -= 30; c.contra = true; c.sig.push('!' + f); }
+      if (v === cv) { c.pts += 10; c.sig.push(f); } else if (statLike(v, cv)) continue;   // typische Verwechslung: weder Plus noch Minus
+      else if (f === 'cost') { c.pts -= 15; c.sig.push('!cost'); }   // Kostenkreis oft verlesen (Log)
+      else { c.pts -= 30; c.contra = true; c.contraN = (c.contraN || 0) + 1; c.sig.push('!' + f); }
     }
   }
   // Nummernleiste nennt ein anderes Set (höchstens 3 Kandidaten-Sets): ein reiner Bildtreffer erfasst dann nicht allein
@@ -852,8 +860,13 @@ function score(res, raw) {
     const keys = new Set(stSets.map((x) => x.key));
     for (const c of C.values()) if (c.imgSure && !keys.has(c.card.si ?? c.card.s)) { c.imgSure = false; c.sig.push('!Set'); }
   }
-  // Nummer (unsicher) und Bild zeigen auf dieselbe Karte, Bild mit Abstand ≥ 8: zwei unabhängige Hinweise → eindeutig
-  for (const c of C.values()) if (c.sig.includes('Nr?') && c.mg != null && c.mg >= MATCH_MARGIN && !c.contra) { c.imgSure = true; c.sig.push('Nr?+Bild'); }
+  // Zwei unabhängige schwache Hinweise auf dieselbe Karte → eindeutig: unsichere Nummer, Eigenname, bester Bildtreffer mit
+  // Abstand ≥ 5 (Zufall lag bei ≤ 4). Ein einzelner verlesener Wert stört dann nicht (Log: Scholar Krosiss, Cerrik Blooddawn).
+  for (const c of C.values()) {
+    const hints = ['Nr?', 'Tok'].filter((g) => c.sig.includes(g)).length + (c.mg != null && c.mg >= AGREE_MG ? 1 : 0);
+    const otherSet = stSets.length && stSets.length <= 3 && !stSets.some((x) => x.key === (c.card.si ?? c.card.s));
+    if (hints >= 2 && (c.contraN || 0) <= 1 && !otherSet) { c.agree = true; c.sig.push('2×'); }
+  }
   let ranked = [...C.values()].sort((a, b) => b.pts - a.pts), top = ranked[0], others = ranked.slice(1);
   // Gleichstand Grundprodukt ↔ Variante derselben Karte („… (LOOT)“, gleiche Nummer): Grundprodukt wählen
   if (top) {
@@ -869,7 +882,7 @@ function score(res, raw) {
   // Erfassen: ≥ 70 Punkte und ≥ 20 Vorsprung; oder eindeutiger Bildtreffer (IMAGE_MATCH) ohne Widerspruch
   // Ein Eigenname im deutschen Namen zeigt auf eine andere Karte: nicht automatisch erfassen (Log 29.10.: Rokdar → Warmaul Champion)
   const tokOther = !!top && !top.sig.includes('Tok') && ranked.some((x) => x !== top && x.sig.includes('Tok') && !sameCard(x.card, top.card));
-  const sure = !!top && !tokOther && ((top.pts >= CAP_PTS && lead >= CAP_LEAD) || (!!top.imgSure && !top.contra && lead > 0));
+  const sure = !!top && !tokOther && ((top.pts >= CAP_PTS && lead >= CAP_LEAD) || (!!top.imgSure && !top.contra && lead > 0) || (!!top.agree && lead > 0));
   return { ranked, sure, lead, st, de };
 }
 const sigText = (c) => `${c.sig.join(' ')} = ${Math.round(c.pts)}`;

@@ -457,6 +457,14 @@ async function main() {
     assert.ok(r.cand.some((c) => /Tok/.test(c.sig) && c.name === 'Sample Storm Hound'), JSON.stringify(r.cand));
     assert.equal(r.sure, false);
   });
+  await check('Kombiniert: unsichere Nummer + Eigenname auf dieselbe Karte → Erfassung trotz eines verlesenen Werts', async () => {
+    await unlock();
+    const r = await frame({ strip: 'J RBETRAYER 163 LL', name: 'Der Hulok', hp: '5' }, { feed: false });
+    assert.equal(r.cand[0].k, 'sotb-163', JSON.stringify(r.cand));
+    assert.match(r.cand[0].sig, /Nr\? Tok .*!hp.*2×/);
+    assert.equal(r.sure, true);
+    await unlock();
+  });
   await check('Kombiniert: OCR liest 153 statt 163 → die Werte korrigieren die Ziffer, Erfassung', async () => {
     await unlock();
     const before = await scanCount();

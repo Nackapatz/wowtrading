@@ -278,3 +278,10 @@ Mit 0.1.7 wurden die drei Quest-Karten jedes Mal über das Bild erfasst (Warteze
 - Eigennamen: Deutsche Karten behalten Namen wie „Rokdar“, „Finkle“ oder „Sha'kar“. Wörter ab 5 Buchstaben aus den englischen Namen, die in höchstens 12 Karten vorkommen, bilden einen Index. Steht ein solches Wort im gelesenen deutschen Namen, gibt das +25 („Tok“). Zeigt der Eigenname auf eine andere Karte als den besten Kandidaten, wird nicht automatisch erfasst (Log: Rokdar gelesen, „Nr Ges“ aus Flavor-Text ergab Warmaul Champion). Eine Erfassung nur über die Nummer liest dafür vorher den Namen.
 - Nummer ohne „/“ und Bild zeigen auf dieselbe Karte (Bild-Abstand ≥ 8, kein Widerspruch): zwei unabhängige Hinweise, das erfasst („Nr?+Bild“, z.B. Dr. Boom! mit d 88 / 13 und „RBEFAAVER 250 264“).
 - Verlesene Set-Wörter ohne „/“: Sets mit Gesamtzahl ±10 und ähnlichem Wort (Buchstabenpaare ≥ 0,35, bei genau einem Set mit exakt dieser Gesamtzahl ≥ 0,2).
+
+## Anpassungen nach dem sechsten Log (Firmware 0.1.13)
+
+- „RBETRAVER 243 LL“ ergab 2/43 und gab fremden Sets „Nr?“. Die Nummer muss jetzt eine ganze Zahl sein, zusammengeklebte Ziffern („13514268“) werden nach drei Ziffern getrennt, und ohne Gesamtzahl gibt es keine. „Nr?“ zählt 25 und liegt damit unter einem Bildtreffer (30).
+- Zwei unabhängige schwache Hinweise auf dieselbe Karte erfassen: unsichere Nummer („Nr?“), Eigenname („Tok“) und der beste Bildtreffer mit Abstand ≥ 5 (Zufall lag bei ≤ 4). Höchstens ein verlesener Wert ist dabei erlaubt, und die Nummernleiste darf kein anderes Set nennen („2×“). Fälle aus dem Log: Scholar Krosiss, Cerrik Blooddawn.
+- Werte-OCR: 1 ↔ 7 (Kostenkreis) und 1 ↔ 11 (Lebensschild) gelten weder als Treffer noch als Widerspruch.
+- Eigennamen ab 6 Buchstaben werden unscharf verglichen (≤ 2 Fehler, gleicher Anfangsbuchstabe), z.B. „Krasise“ → Krosiss.
