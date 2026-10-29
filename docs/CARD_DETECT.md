@@ -285,3 +285,13 @@ Mit 0.1.7 wurden die drei Quest-Karten jedes Mal über das Bild erfasst (Warteze
 - Zwei unabhängige schwache Hinweise auf dieselbe Karte erfassen: unsichere Nummer („Nr?“), Eigenname („Tok“) und der beste Bildtreffer mit Abstand ≥ 5 (Zufall lag bei ≤ 4). Höchstens ein verlesener Wert ist dabei erlaubt, und die Nummernleiste darf kein anderes Set nennen („2×“). Fälle aus dem Log: Scholar Krosiss, Cerrik Blooddawn.
 - Werte-OCR: 1 ↔ 7 (Kostenkreis) und 1 ↔ 11 (Lebensschild) gelten weder als Treffer noch als Widerspruch.
 - Eigennamen ab 6 Buchstaben werden unscharf verglichen (≤ 2 Fehler, gleicher Anfangsbuchstabe), z.B. „Krasise“ → Krosiss.
+
+## Anpassungen nach dem siebten Log (Firmware 0.1.14)
+
+Mit 0.1.13: alle 9 „2×“-Erfassungen richtig, aber 4 Fehl-Erfassungen über die Nummer und eine Karte (Miner Steelwhiskers) nie erkannt.
+- Schrägstrich als „1“ gelesen: „1441/264“ → 144, „144/1264“ → 264. Vierstellige Teile werden gekürzt, eine Nummer über der Gesamtzahl verworfen.
+- Steht neben der Nummer Flavor-Text und passt kein Set-Wort, zählt die Nummer nur als „Nr~“ (40) und erfasst nicht allein (Log: „…Brenne… 39/264“ ergab Form of the Serpent).
+- Werte-OCR: Lesungen über 12 („52“, „25“) zählen nur mit der letzten Ziffer. Ein falscher Wert kostet −10 statt −15/−30, die Sperre greift erst bei zwei falschen Werten. Folge: Eine exakte Nummer mit einem falschen Wert und eine korrigierte Ziffer mit passenden Werten stehen gleich, das gibt Vorschläge statt einer Erfassung.
+- Unscharfe Eigennamen („Tok~“) zählen nur +10, ohne Veto und nicht als Hinweis für „2×“ (Log: „Stahlbart“ → „Stalwart“).
+- Ein gelernter deutscher Name, der zu einer anderen Karte gehört, verhindert die automatische Erfassung wie ein Eigenname.
+- Offen: Das TCGplayer-Bild von Miner Steelwhiskers (21288) hat zur Karte keine Ähnlichkeit (Hamming 119–141).

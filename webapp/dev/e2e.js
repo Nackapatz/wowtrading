@@ -382,7 +382,7 @@ async function main() {
     assert.equal(rec.set, 'Servants of the Betrayer');
     assert.deepEqual([rec.cost, rec.atk, rec.hp, rec.health], [2, 2, 2, 2]);
     assert.deepEqual([rec.type, rec.faction, rec.race, rec.cls], ['Ally', 'Horde', 'Tauren', 'Druid']);
-    assert.deepEqual(rec.matchInfo, { signals: ['Nr', 'Tok', 'Ges', 'cost', 'atk', 'hp', 'Basis'], score: 125, lead: 85 });   // Eigenname „Hulok“ +25; vor Roke: 40 + 10 + 10 + 10 − 30
+    assert.deepEqual(rec.matchInfo, { signals: ['Nr', 'Tok', 'Ges', 'cost', 'atk', 'hp', 'Basis'], score: 125, lead: 65 });   // Eigenname „Hulok“ +25; vor Roke: 40 + 10 + 10 + 10 − 10
     assert.equal(rec.price, 0.23);                 // 0,25 USD · 0,92
     assert.deepEqual(await page.evaluate(() => window.__wow.learned()), { 'Hulok Wegbereiter': 'sotb-163' });
     assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('wowscan.learnedNames'))), { 'Hulok Wegbereiter': 'sotb-163' });
@@ -436,6 +436,16 @@ async function main() {
     assert.equal(id2, (await lastRec()).id);
     assert.equal((await lastRec()).cid, undefined, 'cid wird nicht gespeichert');
   });
+  await check('Kombiniert: Schrägstrich als „1“ gelesen, Nummer im Flavor-Text', async () => {
+    for (const t of ['BETRAYER1531/264', 'RBETRAYERI1531//264', 'BETRAYER153/1264']) {
+      const r = await frame({ strip: t }, { feed: false });
+      assert.equal(r.cand[0] && r.cand[0].k, 'sotb-153', t + ': ' + JSON.stringify(r.cand));
+      assert.match(r.cand[0].sig, /^Nr Ges/, t);
+    }
+    const f = await frame({ strip: 'Her Brenne nden dag 153/264' }, { feed: false });
+    assert.match(f.cand[0].sig, /^Nr~/, 'Flavor ohne Set-Wort: ' + JSON.stringify(f.cand));
+    assert.equal(f.sure, false);
+  });
   await check('Kombiniert: Nummernleiste ohne „/“ zählt nur als unsicheres „Nr?“ bei passendem Set-Wort', async () => {
     const r = await frame({ strip: 'BEIRAYER15314264' }, { feed: false });
     const c = r.cand.find((x) => x.k === 'sotb-153');
@@ -465,20 +475,19 @@ async function main() {
     assert.equal(r.sure, true);
     await unlock();
   });
-  await check('Kombiniert: OCR liest 153 statt 163 → die Werte korrigieren die Ziffer, Erfassung', async () => {
+  await check('Kombiniert: OCR liest 153 statt 163, Werte sprechen für 163 → Gleichstand, nur Vorschläge', async () => {
+    // Werte-OCR ist unzuverlässig (Log 29.10.): ein falscher Wert kostet nur 10, kann eine exakte Nummer also nicht überstimmen
     await unlock();
     const before = await scanCount();
     const misread = { strip: 'BETRAYER 153/264', cost: '2', atk: '2', hp: '2' };
     const r = await frame(misread, { feed: false });
     const pts = Object.fromEntries(r.cand.map((c) => [c.k, c.pts]));
-    assert.equal(pts['sotb-153'], 60, 'Roke: 60 + 10 + 10 + 10 − 30');
+    assert.equal(pts['sotb-153'], 80, 'Roke: 60 + 10 + 10 + 10 − 10');
     assert.equal(pts['sotb-163'], 80, 'Hulok: 40 (Ziffernkorrektur 5→6) + 10 + 3·10');
-    assert.equal(r.cand[0].k, 'sotb-163');
-    assert.equal(r.lead, 20);
-    assert.equal(r.sure, true);
+    assert.equal(r.sure, false);
     await frame(misread);
-    assert.equal(await scanCount(), before + 1, 'eindeutig: ein Standbild');
-    assert.equal((await lastRec()).key, 'sotb-163');
+    assert.equal(await scanCount(), before, 'nicht eindeutig: nichts erfasst');
+    await unlock();
   });
   await check('Kombiniert: gelernter deutscher Name (+40) löst den Nummern-Lesefehler', async () => {
     await unlock();

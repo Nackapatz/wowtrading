@@ -696,8 +696,18 @@ function numVariants(n) {
   return out;
 }
 function parseStrip(t) {
-  const m = /([A-Za-z]{3,})?\s*(\d{1,3})\s*\/{1,2}\s*(\d{2,3})/.exec(String(t || ''));   // „246// 264“ (Log)
-  if (m) return { word: m[1] || '', num: +m[2], tot: +m[3] };
+  // „246// 264“; der Schrägstrich wird oft als „1/“ oder „/1“ gelesen: „BETRAYER1441/264“, „BETRAYER144/1264“ (Log)
+  const m = /([A-Za-z]{3,})?\s*(\d{1,4})\s*\/{1,2}\s*(\d{2,4})/.exec(String(t || ''));
+  if (m) {
+    let a = m[2], b = m[3];
+    if (b.length === 4 && b[0] === '1') b = b.slice(1);
+    if (b.length === 4) b = b.slice(0, 3);
+    if ((a.length === 4 || +a > +b) && a.endsWith('1')) a = a.slice(0, -1);
+    if (a.length === 4) a = a.slice(1);
+    // Flavor-Text daneben (≥ 2 Wörter ab 4 Buchstaben): passt kein Set-Wort, zählt die Nummer nur unsicher (Log: „…Brenne… 39/264“)
+    const flavor = (String(t).match(/[A-Za-z]{4,}/g) || []).length >= 2;
+    if (+a >= 1 && +a <= +b) return { word: m[1] || '', num: +a, tot: +b, flavor };
+  }
   // Ohne „/“ (OCR liest ihn als 1, T, L …, z.B. „BEIRAVER13514268“, „RBERRAYER135T 263“): unsicher (loose),
   // zählt nur bei einem Set-Wort mit höchstens 2 Fehlern und nur als „Nr?“
   // Nummer als ganze Zahl; zusammengeklebt („13514268“) nach 3 Ziffern trennen; sonst nur die Nummer ohne Gesamtzahl
@@ -725,6 +735,7 @@ function findSets(st) {
   const L = S.idx.setList, w = norm(st.word).replace(/ /g, '');
   const dist = (s) => (w.length >= 3 && s.w ? Math.min(lev(w, s.w, 3), s.w2 && s.w2.length >= 4 ? lev(w, s.w2, 3) : 9) : 9);
   const near = L.filter((s) => dist(s) <= 2), byTot = L.filter((s) => s.tot === st.tot);
+  st.byWord = near.length > 0;
   // Ohne „/“: Set-Wort mit ≤ 2 Fehlern, oder ≤ 3 Fehler / Buchstabenpaar-Ähnlichkeit ≥ 0,45 bei passender Gesamtzahl
   if (st.loose) {
     // Ohne „/“: Set-Wort mit ≤ 2 Fehlern; sonst Gesamtzahl ±10 mit ähnlichem Wort (≤ 3 Fehler oder Buchstabenpaare ≥ 0,35),
@@ -746,7 +757,8 @@ function findSets(st) {
 }
 // Verwechslungen der Werte-OCR aus dem Log: 1 ↔ 7 (Kostenkreis), 1 ↔ 11 (Lebensschild)
 const statLike = (v, cv) => (v === 7 && cv === 1) || (v === 1 && cv === 7) || (v === 11 && cv === 1) || (v === 1 && cv === 11);
-const statNum = (t) => { const m = /\d{1,2}/.exec(t || ''); return m ? +m[0] : null; };
+// Zweistellige Lesungen wie „52“ (Wert 2) oder „25“ sind fast immer Grafik + Ziffer: über 12 → letzte Ziffer
+const statNum = (t) => { const m = /\d{1,2}/.exec(t || ''); if (!m) return null; const v = +m[0]; return v > 12 ? v % 10 : v; };
 const cleanDe = (t) => String(t || '').replace(/[^A-Za-zÄÖÜäöüß' -]+/g, ' ').replace(/\s+/g, ' ').trim();
 // Gleiche Karte, anderes Produkt: gleiches Set, gleiche Nummer, gleicher Grundname
 const sameCard = (a, b) => a.s === b.s && numStr(a) != null && numStr(a) === numStr(b) && baseKey(a) === baseKey(b);
@@ -814,7 +826,8 @@ function score(res, raw) {
   const st = parseStrip(raw.strip), stSets = st ? findSets(st) : [];
   for (const s of stSets) {
     if (st.loose) { for (const i of idx.byNum.get(s.key + '|' + st.num) || []) add(idx.cards[i], 25, 'Nr?'); continue; }   // unter einem Bildtreffer (30)
-    for (const i of idx.byNum.get(s.key + '|' + st.num) || []) add(idx.cards[i], 60, 'Nr');
+    const weak = st.flavor && !st.byWord;
+    for (const i of idx.byNum.get(s.key + '|' + st.num) || []) add(idx.cards[i], weak ? 40 : 60, weak ? 'Nr~' : 'Nr');
     for (const v of numVariants(st.num)) for (const i of idx.byNum.get(s.key + '|' + v) || []) add(idx.cards[i], 40, 'Nr~');
   }
   if (res) for (const t of res.top) {
@@ -832,13 +845,15 @@ function score(res, raw) {
     const k = learnedK(de), card = k && idx.byK.get(k);
     if (card) add(card, 40, 'DE');
     for (const r of matchName(de).ranked) if (r.score >= 0.8) for (const card of r.cards) add(card, 20, 'EN');
-    const tix = tokenIndex(), hit = new Set();
+    const tix = tokenIndex(), hit = new Set(), fuzzy = new Set();
     for (const t of nameTokens(de)) {
       for (const i of tix.get(t) || []) hit.add(i);
-      // ab 6 Buchstaben unscharf (≤ 2 Fehler, gleicher Anfangsbuchstabe): „Krasise“ → Krosiss
-      if (t.length >= 6 && !tix.has(t)) for (const [k, a] of tix) if (k[0] === t[0] && Math.abs(k.length - t.length) <= 2 && k.length >= 6 && lev(t, k, 2) <= 2) for (const i of a) hit.add(i);
+      // ab 6 Buchstaben unscharf (≤ 2 Fehler, gleicher Anfangsbuchstabe): „Krasise“ → Krosiss. Nur +10 und ohne Veto,
+      // weil deutsche Wörter englischen ähneln können (Log: „Stahlbart“ → Stalwart)
+      if (t.length >= 6 && !tix.has(t)) for (const [k, a] of tix) if (k[0] === t[0] && Math.abs(k.length - t.length) <= 2 && k.length >= 6 && lev(t, k, 2) <= 2) for (const i of a) fuzzy.add(i);
     }
     if (hit.size && hit.size <= 12) for (const i of hit) add(idx.cards[i], 25, 'Tok');
+    if (fuzzy.size && fuzzy.size <= 12) for (const i of fuzzy) if (!hit.has(i)) add(idx.cards[i], 10, 'Tok~');
   }
   const sv = { cost: statNum(raw.cost), atk: statNum(raw.atk), hp: statNum(raw.hp) };
   for (const c of C.values()) {
@@ -850,8 +865,10 @@ function score(res, raw) {
       const v = sv[f], cv = c.card[f];
       if (v == null || cv == null || (f === 'cost' ? noCost : !ally)) continue;
       if (v === cv) { c.pts += 10; c.sig.push(f); } else if (statLike(v, cv)) continue;   // typische Verwechslung: weder Plus noch Minus
-      else if (f === 'cost') { c.pts -= 15; c.sig.push('!cost'); }   // Kostenkreis oft verlesen (Log)
-      else { c.pts -= 30; c.contra = true; c.contraN = (c.contraN || 0) + 1; c.sig.push('!' + f); }
+      else {   // Werte-OCR ist oft falsch (Log 29.10.: Kosten „52“, Leben „11“): −10, Sperre erst bei zwei Widersprüchen
+        c.pts -= 10; c.contraN = (c.contraN || 0) + 1; c.sig.push('!' + f);
+        if (c.contraN >= 2) c.contra = true;
+      }
     }
   }
   // Nummernleiste nennt ein anderes Set (höchstens 3 Kandidaten-Sets): ein reiner Bildtreffer erfasst dann nicht allein
@@ -881,7 +898,8 @@ function score(res, raw) {
   const lead = top ? top.pts - (others[0] ? others[0].pts : 0) : 0;
   // Erfassen: ≥ 70 Punkte und ≥ 20 Vorsprung; oder eindeutiger Bildtreffer (IMAGE_MATCH) ohne Widerspruch
   // Ein Eigenname im deutschen Namen zeigt auf eine andere Karte: nicht automatisch erfassen (Log 29.10.: Rokdar → Warmaul Champion)
-  const tokOther = !!top && !top.sig.includes('Tok') && ranked.some((x) => x !== top && x.sig.includes('Tok') && !sameCard(x.card, top.card));
+  // Ebenso ein gelernter deutscher Name, der zu einer anderen Karte gehört
+  const tokOther = !!top && ['Tok', 'DE'].some((g) => !top.sig.includes(g) && ranked.some((x) => x !== top && x.sig.includes(g) && !sameCard(x.card, top.card)));
   const sure = !!top && !tokOther && ((top.pts >= CAP_PTS && lead >= CAP_LEAD) || (!!top.imgSure && !top.contra && lead > 0) || (!!top.agree && lead > 0));
   return { ranked, sure, lead, st, de };
 }
