@@ -1054,6 +1054,27 @@ async function main() {
       assert.deepEqual(p.errors, []);
     } finally { await b.close(); }
   });
+  await check('Firmware-Seite: Stylesheet und Skripte inline, eine einzige Anfrage', async () => {
+    // tools/embed_web.py baut index.html mit allen Dateien inline, weil der ESP nur eine TLS-Verbindung bedient
+    const root = path.join(__dirname, '..', '..');
+    const html = require('node:child_process').execFileSync('python3', ['-c',
+      'import sys; sys.path.insert(0, "tools"); import embed_web; sys.stdout.write(embed_web.inline_assets(open("webapp/index.html", encoding="utf-8").read()))'],
+      { cwd: root, encoding: 'utf8' });
+    assert.ok(!/src="(app|arthash|carddetect)\.js"|href="style\.css"/.test(html), 'keine externen Dateien mehr');
+    const b = await chromium.launch();
+    try {
+      const c = await b.newContext();
+      const asked = [];
+      await c.route(`http://127.0.0.1:${PORT}/`, (r) => r.fulfill({ contentType: 'text/html; charset=utf-8', body: html }));
+      await c.route(/\/(app|arthash|carddetect)\.js$|\/style\.css$/, (r) => { asked.push(r.request().url()); r.abort(); });
+      await c.route('https://cdn.jsdelivr.net/**', (r) => r.abort());
+      const p = await openApp(c);
+      assert.deepEqual(asked, []);
+      assert.equal(await p.evaluate(() => typeof window.WowCardDetect + typeof window.WowArtHash), 'objectobject');
+      assert.notEqual(await p.evaluate(() => getComputedStyle(document.body).backgroundColor), 'rgba(0, 0, 0, 0)');
+      assert.deepEqual(p.errors, []);
+    } finally { await b.close(); }
+  });
   await check('Galerie (kein Kartenrand): Meldung erscheint, nichts wird erfasst', async () => {
     const b = await chromium.launch({ args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] });
     try {

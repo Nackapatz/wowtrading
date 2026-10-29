@@ -69,7 +69,7 @@ README.md (Deutsch)
 - mDNS: `<hostname>.local`.
 - ArduinoOTA mit `otaPass` (Port 8266).
 - API (alle JSON, UTF-8):
-  - `GET /` → `index.html` (gzip, `Content-Encoding: gzip`), `GET /app.js`, `GET /style.css` analog. Cache-Control: `no-cache`.
+  - `GET /` → `index.html` (gzip, `Content-Encoding: gzip`) mit `style.css`, `arthash.js`, `carddetect.js` und `app.js` inline: eine Anfrage statt fünf, weil der ESP nur eine TLS-Verbindung gleichzeitig bedient. Cache-Control: `no-cache`, ETag = Build-Zeit.
   - `GET /api/status` → `{version, ip, hostname, scans, freeHeap, uptime, country, currency, dataUrl}`
   - `POST /api/scan` Body = Scan-Datensatz (siehe unten, max 2 KB). Firmware vergibt `id` (fortlaufend) und speichert als eine Zeile in `/scans.jsonl`. Antwort `{ok:true,id}`. Zeigt Karteninfo auf dem OLED.
   - `GET /api/scans` → JSON-Array, gestreamt (chunked oder per Content-Length nach Dateigröße), nicht komplett in RAM laden.

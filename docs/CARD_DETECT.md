@@ -10,7 +10,7 @@ Alles läuft im Handy. Der ESP8266 bleibt unverändert.
 ## Modul `webapp/carddetect.js`
 
 Wie `arthash.js`: UMD-Muster, im Browser `window.WowCardDetect`, in Node `module.exports`, ohne
-Abhängigkeiten, nur reine Funktionen auf Arrays. Wird in `tools/embed_web.py` und `index.html` eingebunden.
+Abhängigkeiten, nur reine Funktionen auf Arrays. Wird in `index.html` eingebunden; `tools/embed_web.py` setzt die Datei für die Firmware inline ein.
 
 ### `detectCard(gray, w, h, opts)` → `null | { corners, score }`
 
@@ -296,7 +296,8 @@ Mit 0.1.13: alle 9 „2×“-Erfassungen richtig, aber 4 Fehl-Erfassungen über 
 - Ein gelernter deutscher Name, der zu einer anderen Karte gehört, verhindert die automatische Erfassung wie ein Eigenname.
 - Offen: Das TCGplayer-Bild von Miner Steelwhiskers (21288) hat zur Karte keine Ähnlichkeit (Hamming 119–141).
 
-## Anpassungen nach dem achten Log (Firmware 0.1.15)
+## Anpassungen nach dem achten Log (Firmware 0.1.15/0.1.16)
 
 - Unscharfe Eigennamen: Pro gelesenem Wort zählen nur die nächsten Treffer. Ein abgeschnittener Name, dessen Anfang mit höchstens einem Fehler passt, gilt als 1,5 Fehler (Log: „Callst“ ergab Caller statt Calister).
 - Firmware: Der HTTPS-Server hält höchstens 3 statt 5 wartende Verbindungen. Im Log fiel der freie Speicher bei mehreren gleichzeitigen Verbindungen auf 5,8 KB und die Seite war etwa 2 Minuten nicht erreichbar.
+- 0.1.16: Die Firmware liefert die Seite als eine Datei mit Stylesheet und Skripten inline aus. Bei fünf gleichzeitigen Verbindungen (wie ein Browser sie öffnet) wurden mit 0.1.15 einzelne Dateien abgewiesen.
