@@ -113,6 +113,7 @@ void setup() {
     g_splashUntil = millis() + SPLASH_MS;
 
     storageBegin();
+    healthBoot();
     scansBegin();
     g_configured = configLoad() && configIsComplete(gConfig);
 

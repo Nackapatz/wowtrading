@@ -1600,7 +1600,7 @@ function renderEspInfo() {
   $('#espInfo').innerHTML = e
     ? [['Version', e.version], ['IP', e.ip], ['Hostname', e.hostname ? e.hostname + '.local' : '–'], ['Scans', e.scans],
       ['Freier Speicher', e.freeHeap != null ? e.freeHeap + ' B' + (e.maxBlock != null ? ` (größter Block ${e.maxBlock} B, Minimum ${e.minHeap} B)` : '') : '–'], ['Laufzeit', fmtUptime(e.uptime)],
-      ...(e.rssi != null ? [['WLAN-Signal', `${e.rssi} dBm · ${e.wifiDrops} Abbrüche`], ['Letzter Neustart', e.resetReason || '–']] : []),
+      ...(e.rssi != null ? [['WLAN-Signal', `${e.rssi} dBm · ${e.wifiDrops} Abbrüche`], ['Letzter Neustart', e.bootInfo || e.resetReason || '–']] : []),
       ['Land / Währung', `${e.country} / ${e.currency}`]]
       .map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')
     : '<dt>Status</dt><dd>Scanner nicht erreichbar</dd>';

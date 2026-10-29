@@ -4,6 +4,13 @@
 
 #include <Arduino.h>
 
+// Call once in setup() after storageBegin(): records why the device restarted
+// (exception, watchdog, or our own planned restart) in CRASH_FILE.
+void healthBoot();
+
+// Short description of the last reset for /api/status, e.g. "Exception 28 @0x40212345".
+const String& healthBootInfo();
+
 // Call from loop(). wifiUp: the station is connected.
 void healthLoop(bool wifiUp);
 

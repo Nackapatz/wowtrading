@@ -159,6 +159,7 @@ void handleStatus() {
     doc["rssi"] = WiFi.RSSI();
     doc["wifiDrops"] = healthWifiDrops();
     doc["resetReason"] = ESP.getResetReason();
+    doc["bootInfo"] = healthBootInfo();
     doc["uptime"] = millis() / 1000;
     doc["country"] = gConfig.country;
     doc["currency"] = gConfig.currency;
@@ -268,6 +269,11 @@ void handleLogPost() {
 
 void handleLogGet() {
     sendFile(https.hasArg("old") ? LOG_OLD_FILE : LOG_FILE, "application/x-ndjson");
+}
+
+// Crash records written at boot (health.cpp), one JSON line each.
+void handleCrashGet() {
+    sendFile(CRASH_FILE, "application/x-ndjson");
 }
 
 void handleLogDelete() {
@@ -442,6 +448,7 @@ void registerRoutes() {
     https.on("/api/log", HTTP_POST, handleLogPost);
     https.on("/api/log", HTTP_GET, handleLogGet);
     https.on("/api/log", HTTP_DELETE, handleLogDelete);
+    https.on("/api/crash", HTTP_GET, handleCrashGet);
     https.on("/api/update", HTTP_POST, handleUpdateDone, handleUpdateUpload);
     https.onNotFound(handleNotFound);
 }

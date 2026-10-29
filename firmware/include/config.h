@@ -53,6 +53,8 @@ constexpr char LOG_FILE[] = "/log.jsonl";       // recognition log from the app 
 constexpr char LOG_OLD_FILE[] = "/log.old";     // previous log after rotation
 constexpr size_t LOG_MAX_BYTES = 32 * 1024;     // rotate above this size
 constexpr size_t MAX_LOG_BODY = 1536;           // POST /api/log body limit
+constexpr char CRASH_FILE[] = "/crash.log";     // one JSON line per unplanned reset or watchdog restart (GET /api/crash)
+constexpr size_t CRASH_MAX_BYTES = 4 * 1024;    // start over above this size
 
 constexpr size_t MAX_SCANS = 2000;
 constexpr size_t MAX_SCAN_BODY = 2048;   // POST /api/scan body limit
