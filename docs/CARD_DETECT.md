@@ -301,3 +301,11 @@ Mit 0.1.13: alle 9 „2×“-Erfassungen richtig, aber 4 Fehl-Erfassungen über 
 - Unscharfe Eigennamen: Pro gelesenem Wort zählen nur die nächsten Treffer. Ein abgeschnittener Name, dessen Anfang mit höchstens einem Fehler passt, gilt als 1,5 Fehler (Log: „Callst“ ergab Caller statt Calister).
 - Firmware: Der HTTPS-Server hält höchstens 3 statt 5 wartende Verbindungen. Im Log fiel der freie Speicher bei mehreren gleichzeitigen Verbindungen auf 5,8 KB und die Seite war etwa 2 Minuten nicht erreichbar.
 - 0.1.16: Die Firmware liefert die Seite als eine Datei mit Stylesheet und Skripten inline aus. Bei fünf gleichzeitigen Verbindungen (wie ein Browser sie öffnet) wurden mit 0.1.15 einzelne Dateien abgewiesen.
+
+## Anpassungen nach dem neunten Log (Firmware 0.1.17)
+
+Mit 0.1.16: 43 Erfassungen, eine falsch (Chew Toy statt Retainer Cara).
+- Schrägstrich als „7“ gelesen: „2037/264“ ergab 37 statt 203. Endet eine vierstellige Nummer auf 1 oder 7, fällt diese Ziffer weg. Eine andere überzählige Ziffer wird vorne gestrichen, die Nummer zählt dann nur als „Nr~“.
+- Eigennamen nach Seltenheit: Ein Wort aus höchstens 2 verschiedenen Namen gibt „Tok“ +25, aus 3–5 Namen +15, sonst +10 (beides als „Tok~“, ohne Veto). Nachdrucke zählen als ein Name. Log: „Kavai der Wanderer“ schlug Rexxar the Wanderer vor.
+- Wird ein Eigenname exakt gefunden, entfällt der unscharfe Vergleich (Log: „Wächter Ravella“ → Watcher).
+- Nur eine Nummer ohne Gesamtzahl braucht mindestens 2 Ziffern und keinen Buchstaben direkt dahinter (Log: „peTRaver2s“ ergab Nr. 2).

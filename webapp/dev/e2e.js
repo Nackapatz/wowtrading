@@ -436,12 +436,17 @@ async function main() {
     assert.equal(id2, (await lastRec()).id);
     assert.equal((await lastRec()).cid, undefined, 'cid wird nicht gespeichert');
   });
-  await check('Kombiniert: Schrägstrich als „1“ gelesen, Nummer im Flavor-Text', async () => {
-    for (const t of ['BETRAYER1531/264', 'RBETRAYERI1531//264', 'BETRAYER153/1264']) {
+  await check('Kombiniert: Schrägstrich als „1“ oder „7“ gelesen, Nummer im Flavor-Text', async () => {
+    for (const t of ['BETRAYER1531/264', 'RBETRAYERI1531//264', 'BETRAYER153/1264', 'BETRAVER1537/264']) {
       const r = await frame({ strip: t }, { feed: false });
       assert.equal(r.cand[0] && r.cand[0].k, 'sotb-153', t + ': ' + JSON.stringify(r.cand));
       assert.match(r.cand[0].sig, /^Nr Ges/, t);
     }
+    // Log 29.10.: „2037/264“ ergab 37 statt 203; eine andere überzählige Ziffer erfasst nicht allein
+    const g = await frame({ strip: 'BETRAYER 3153/264' }, { feed: false });
+    assert.match(g.cand[0] && g.cand[0].sig, /^Nr~/, JSON.stringify(g.cand));
+    assert.equal(g.cand[0].k, 'sotb-153');
+    assert.equal(g.sure, false);
     const f = await frame({ strip: 'Her Brenne nden dag 153/264' }, { feed: false });
     assert.match(f.cand[0].sig, /^Nr~/, 'Flavor ohne Set-Wort: ' + JSON.stringify(f.cand));
     assert.equal(f.sure, false);
@@ -453,6 +458,8 @@ async function main() {
     assert.equal(c.pts, 25); assert.equal(c.sig, 'Nr?');
     const r4 = await frame({ strip: 'J RBETRAYER 153 LL SEs' }, { feed: false });
     assert.deepEqual(r4.cand.map((x) => [x.k, x.sig]), [['sotb-153', 'Nr?']], 'ganze Zahl ohne Gesamtzahl, nicht 1/53');
+    const r5 = await frame({ strip: 'peTRaver2s' }, { feed: false });
+    assert.equal(r5.cand.length, 0, 'eine Ziffer mit Buchstabe dahinter ist keine Nummer: ' + JSON.stringify(r5.cand));
     assert.equal(r.sure, false);
     const r3 = await frame({ strip: 'A RUBETRAYER153// 264' }, { feed: false });
     assert.equal(r3.cand[0] && r3.cand[0].k, 'sotb-153', '„//“ mit Leerzeichen: ' + JSON.stringify(r3.cand));

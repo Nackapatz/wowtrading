@@ -702,11 +702,14 @@ function parseStrip(t) {
     let a = m[2], b = m[3];
     if (b.length === 4 && b[0] === '1') b = b.slice(1);
     if (b.length === 4) b = b.slice(0, 3);
-    if ((a.length === 4 || +a > +b) && a.endsWith('1')) a = a.slice(0, -1);
-    if (a.length === 4) a = a.slice(1);
+    // Schrägstrich als 1 oder 7 mitgelesen: „1441/264“ → 144, „2037/264“ → 203 (nie das Ende einer langen Ziffernfolge nehmen)
+    if ((a.length === 4 || +a > +b) && /[17]$/.test(a)) a = a.slice(0, -1);
+    // sonst vierstellig: erste Ziffer weglassen, aber nur unsicher („Nr~“)
+    const glued = a.length === 4;
+    if (glued) a = a.slice(1);
     // Flavor-Text daneben (≥ 2 Wörter ab 4 Buchstaben): passt kein Set-Wort, zählt die Nummer nur unsicher (Log: „…Brenne… 39/264“)
     const flavor = (String(t).match(/[A-Za-z]{4,}/g) || []).length >= 2;
-    if (+a >= 1 && +a <= +b) return { word: m[1] || '', num: +a, tot: +b, flavor };
+    if (+a >= 1 && +a <= +b) return { word: m[1] || '', num: +a, tot: +b, flavor, glued };
   }
   // Ohne „/“ (OCR liest ihn als 1, T, L …, z.B. „BEIRAVER13514268“, „RBERRAYER135T 263“): unsicher (loose),
   // zählt nur bei einem Set-Wort mit höchstens 2 Fehlern und nur als „Nr?“
@@ -715,7 +718,8 @@ function parseStrip(t) {
   const s = String(t || '');
   const l = /([A-Za-z]{5,})\s?(\d{1,3})(?!\d)[^\d]{0,3}(\d{2,3})/.exec(s) || /([A-Za-z]{5,})\s?(\d{3})(\d{2,3})/.exec(s);
   if (l) return { word: l[1], num: +l[2], tot: +l[3], loose: true };
-  const n = /([A-Za-z]{5,})\s?(\d{1,3})(?!\d)/.exec(s);
+  // nur die Nummer: mindestens 2 Ziffern und kein Buchstabe direkt dahinter (Log: „peTRaver2s“ für 235 ergab Nr. 2)
+  const n = /([A-Za-z]{5,})\s?(\d{2,3})(?![\dA-Za-z])/.exec(s);
   return n ? { word: n[1], num: +n[2], tot: null, loose: true } : null;
 }
 const strictStrip = (t) => { const st = parseStrip(t); return !!st && !st.loose; };
@@ -793,7 +797,9 @@ function tokenIndex() {
     for (const t of new Set(norm(stripSuffix(c.n)).split(/[^a-z]+/))) if (t.length >= 5) { if (!map.has(t)) map.set(t, []); map.get(t).push(i); }
   });
   for (const [t, a] of map) if (a.length > 12) map.delete(t);
-  S.tokIdx = { idx: S.idx, map };
+  // verschiedene Namen je Wort: Nachdrucke derselben Karte („Valanos“ in 3 Sets) zählen einmal
+  const names = new Map([...map].map(([t, a]) => [t, new Set(a.map((i) => norm(stripSuffix(S.idx.cards[i].n)))).size]));
+  S.tokIdx = { idx: S.idx, map, names };
   return map;
 }
 const nameTokens = (de) => [...new Set(norm(de).split(/[^a-z]+/).filter((t) => t.length >= 5))];
@@ -826,7 +832,7 @@ function score(res, raw) {
   const st = parseStrip(raw.strip), stSets = st ? findSets(st) : [];
   for (const s of stSets) {
     if (st.loose) { for (const i of idx.byNum.get(s.key + '|' + st.num) || []) add(idx.cards[i], 25, 'Nr?'); continue; }   // unter einem Bildtreffer (30)
-    const weak = st.flavor && !st.byWord;
+    const weak = (st.flavor && !st.byWord) || st.glued;
     for (const i of idx.byNum.get(s.key + '|' + st.num) || []) add(idx.cards[i], weak ? 40 : 60, weak ? 'Nr~' : 'Nr');
     for (const v of numVariants(st.num)) for (const i of idx.byNum.get(s.key + '|' + v) || []) add(idx.cards[i], 40, 'Nr~');
   }
@@ -845,9 +851,15 @@ function score(res, raw) {
     const k = learnedK(de), card = k && idx.byK.get(k);
     if (card) add(card, 40, 'DE');
     for (const r of matchName(de).ranked) if (r.score >= 0.8) for (const card of r.cards) add(card, 20, 'EN');
-    const tix = tokenIndex(), hit = new Set(), fuzzy = new Set();
-    for (const t of nameTokens(de)) {
-      for (const i of tix.get(t) || []) hit.add(i);
+    // Seltene Wörter zählen mehr: „Kavai“ (1 Karte) vor „Wanderer“ (mehrere; Log: Kavai → Rexxar the Wanderer).
+    // Nur Wörter aus höchstens 2 Karten zählen als „Tok“ (Veto, Hinweis für „2×“), häufigere als „Tok~“
+    const tix = tokenIndex(), hit = new Map(), fuzzy = new Set(), toks = nameTokens(de);
+    for (const t of toks) {
+      const a = tix.get(t) || [], nn = S.tokIdx.names.get(t), pts = nn <= 2 ? 25 : nn <= 5 ? 15 : 10;
+      for (const i of a) if (!(hit.get(i) >= pts)) hit.set(i, pts);
+    }
+    for (const t of toks) {
+      if (hit.size) break;   // ein exakt gefundener Eigenname schlägt jede unscharfe Ähnlichkeit (Log: „Wächter Ravella“ → Watcher)
       // ab 6 Buchstaben unscharf (≤ 2 Fehler, gleicher Anfangsbuchstabe): „Krasise“ → Krosiss. Nur +10 und ohne Veto,
       // weil deutsche Wörter englischen ähneln können (Log: „Stahlbart“ → Stalwart). Nur die nächsten Wörter zählen;
       // ein abgeschnittener Name (Anfang mit ≤ 1 Fehler) gilt als 1,5: „Callst“ → Calister vor Caller.
@@ -863,8 +875,8 @@ function score(res, raw) {
       }
       for (const a of near) for (const i of a) fuzzy.add(i);
     }
-    if (hit.size && hit.size <= 12) for (const i of hit) add(idx.cards[i], 25, 'Tok');
-    if (fuzzy.size && fuzzy.size <= 12) for (const i of fuzzy) if (!hit.has(i)) add(idx.cards[i], 10, 'Tok~');
+    for (const [i, pts] of hit) if (hit.size <= 12 || pts === 25) add(idx.cards[i], pts, pts === 25 ? 'Tok' : 'Tok~');
+    if (fuzzy.size && fuzzy.size <= 12) for (const i of fuzzy) add(idx.cards[i], 10, 'Tok~');
   }
   const sv = { cost: statNum(raw.cost), atk: statNum(raw.atk), hp: statNum(raw.hp) };
   for (const c of C.values()) {
