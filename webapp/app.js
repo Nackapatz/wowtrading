@@ -699,8 +699,13 @@ function parseStrip(t) {
   if (m) return { word: m[1] || '', num: +m[2], tot: +m[3] };
   // Ohne „/“ (OCR liest ihn als 1, T, L …, z.B. „BEIRAVER13514268“, „RBERRAYER135T 263“): unsicher (loose),
   // zählt nur bei einem Set-Wort mit höchstens 2 Fehlern und nur als „Nr?“
-  const l = /([A-Za-z]{5,})\s?(\d{1,3})[^\d]{0,3}(\d{2,3})/.exec(String(t || ''));
-  return l ? { word: l[1], num: +l[2], tot: +l[3], loose: true } : null;
+  // Nummer als ganze Zahl; zusammengeklebt („13514268“) nach 3 Ziffern trennen; sonst nur die Nummer ohne Gesamtzahl
+  // („RBETRAVER 243 LL“ ergab sonst 2/43)
+  const s = String(t || '');
+  const l = /([A-Za-z]{5,})\s?(\d{1,3})(?!\d)[^\d]{0,3}(\d{2,3})/.exec(s) || /([A-Za-z]{5,})\s?(\d{3})(\d{2,3})/.exec(s);
+  if (l) return { word: l[1], num: +l[2], tot: +l[3], loose: true };
+  const n = /([A-Za-z]{5,})\s?(\d{1,3})(?!\d)/.exec(s);
+  return n ? { word: n[1], num: +n[2], tot: null, loose: true } : null;
 }
 const strictStrip = (t) => { const st = parseStrip(t); return !!st && !st.loose; };
 // Ähnlichkeit zweier Wörter über gemeinsame Buchstabenpaare (Dice), 0..1
@@ -724,7 +729,7 @@ function findSets(st) {
     // Ohne „/“: Set-Wort mit ≤ 2 Fehlern; sonst Gesamtzahl ±10 mit ähnlichem Wort (≤ 3 Fehler oder Buchstabenpaare ≥ 0,35),
     // bei genau einem Set mit exakt dieser Gesamtzahl reicht 0,2 („RBEFAAVER 250 264“, „REBEERAVER 251 254“)
     const sim = (s) => Math.max(dice(w, s.w || ''), s.w2 ? dice(w, s.w2) : 0);
-    const nearTot = L.filter((s) => s.tot && Math.abs(s.tot - st.tot) <= 10 && (dist(s) <= 3 || sim(s) >= (byTot.length === 1 && s.tot === st.tot ? 0.2 : 0.35)));
+    const nearTot = st.tot == null ? [] : L.filter((s) => s.tot && Math.abs(s.tot - st.tot) <= 10 && (dist(s) <= 3 || sim(s) >= (byTot.length === 1 && s.tot === st.tot ? 0.2 : 0.35)));
     return [...new Set([...near, ...nearTot])];
   }
   const both = near.filter((s) => s.tot === st.tot);
@@ -805,7 +810,7 @@ function score(res, raw) {
   };
   const st = parseStrip(raw.strip), stSets = st ? findSets(st) : [];
   for (const s of stSets) {
-    if (st.loose) { for (const i of idx.byNum.get(s.key + '|' + st.num) || []) add(idx.cards[i], 30, 'Nr?'); continue; }
+    if (st.loose) { for (const i of idx.byNum.get(s.key + '|' + st.num) || []) add(idx.cards[i], 25, 'Nr?'); continue; }   // unter einem Bildtreffer (30)
     for (const i of idx.byNum.get(s.key + '|' + st.num) || []) add(idx.cards[i], 60, 'Nr');
     for (const v of numVariants(st.num)) for (const i of idx.byNum.get(s.key + '|' + v) || []) add(idx.cards[i], 40, 'Nr~');
   }

@@ -440,7 +440,9 @@ async function main() {
     const r = await frame({ strip: 'BEIRAYER15314264' }, { feed: false });
     const c = r.cand.find((x) => x.k === 'sotb-153');
     assert.ok(c, JSON.stringify(r.cand));
-    assert.equal(c.pts, 30); assert.equal(c.sig, 'Nr?');
+    assert.equal(c.pts, 25); assert.equal(c.sig, 'Nr?');
+    const r4 = await frame({ strip: 'J RBETRAYER 153 LL SEs' }, { feed: false });
+    assert.deepEqual(r4.cand.map((x) => [x.k, x.sig]), [['sotb-153', 'Nr?']], 'ganze Zahl ohne Gesamtzahl, nicht 1/53');
     assert.equal(r.sure, false);
     const r3 = await frame({ strip: 'A RUBETRAYER153// 264' }, { feed: false });
     assert.equal(r3.cand[0] && r3.cand[0].k, 'sotb-153', '„//“ mit Leerzeichen: ' + JSON.stringify(r3.cand));
