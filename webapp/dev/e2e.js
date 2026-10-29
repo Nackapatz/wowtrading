@@ -726,6 +726,16 @@ async function main() {
     await page.waitForTimeout(250);
     assert.equal(await scanCount(), before - 1);
   });
+  await check('Letzte Erfassung: Nachdruck in anderem Set wählbar („Anderer Druck“)', async () => {
+    await tab(page, 'scan');
+    await page.evaluate(() => window.__wow.capture('sma-9'));
+    const chip = page.locator('#last [data-var="smb-7"]');
+    await chip.waitFor();
+    assert.match(await chip.textContent(), /Anderer Druck: .*7/);
+    await chip.click();
+    await page.waitForFunction(() => document.querySelector('#last h3') && !!document.querySelector('#last [data-var="sma-9"]'));
+    assert.equal((await lastRec()).key, 'smb-7');
+  });
   await check('Sammlung: Löschen einer Fehl-Erfassung vergisst den dabei gelernten Namen', async () => {
     await page.evaluate(() => window.__wow.capture('sotb-153', 'Falscher Name'));
     assert.equal((await page.evaluate(() => window.__wow.learned()))['Falscher Name'], 'sotb-153');

@@ -1600,11 +1600,15 @@ function renderScan() {
       ${priceBlockHtml(pi)}
     </div>
     <div class="row-actions"><button class="btn primary" type="button" data-act="plus1">+1 (Menge erhöhen)</button>
-    ${variantsFor(rec).map((c) => `<button class="chip sm" type="button" data-var="${esc(c.k)}">Variante ändern: ${esc(c.n)}</button>`).join('')}</div>`;
+    ${variantsFor(rec).map((c) => `<button class="chip sm" type="button" data-var="${esc(c.k)}">${c.s === rec.set ? `Variante ändern: ${esc(c.n)}` : `Anderer Druck: ${esc(c.sc || c.s)}${c.num != null ? ' ' + esc(String(c.num)) : ''}`}</button>`).join('')}</div>`;
 }
 function variantsFor(rec) {
   const card = S.idx && rec.key ? S.idx.byK.get(rec.key) : null;
-  return card ? variantsOf(card).slice(0, 4) : [];
+  if (!card) return [];
+  // Dazu Nachdrucke derselben Karte in anderen Sets (z.B. Starter-Deck), weil der Bildabgleich dort oft das Original wählt
+  const same = variantsOf(card), bk = baseKey(card);
+  const other = S.idx.cards.filter((c) => c !== card && c.s !== card.s && baseKey(c) === bk && !same.includes(c));
+  return [...same.slice(0, 4), ...other.slice(0, 3)];
 }
 // Variante wechseln: die API kann nur die Menge ändern → Eintrag löschen und als anderes Produkt neu anlegen
 async function switchVariant(k) {
