@@ -1754,7 +1754,12 @@ function importLearned(text) {
 function syncScanFoil() { $('#scanFoil').checked = !!S.ui.foil; }
 async function loadSettings() {
   try {
-    const s = await api('GET', 'api/settings');
+    // Der ESP bedient nur eine Verbindung: beim Seitenaufbau kurz besetzt → zweimal wiederholen
+    let s;
+    for (let i = 0; ; i++) {
+      try { s = await api('GET', 'api/settings'); break; }
+      catch (e) { if (e.status || i >= 2) throw e; await new Promise((r) => setTimeout(r, 800 * (i + 1))); }
+    }
     S.settings = { country: s.country || 'DE', currency: s.currency || CUR_OF[s.country] || 'EUR', dataUrl: s.dataUrl || '' };
     lsSet(LS_SET, S.settings);
     S.espOk = true;
@@ -1787,7 +1792,9 @@ async function saveSettings(ev) {
   syncScanFoil();
   const next = { country, currency: CUR_OF[country] || 'EUR', dataUrl };
   try {
-    await api('POST', 'api/settings', next);
+    // Leeres Feld (z.B. Einstellungen beim Laden nicht erreichbar): Daten-URL des Scanners behalten, nicht überschreiben
+    await api('POST', 'api/settings', dataUrl ? next : { country: next.country, currency: next.currency });
+    if (!dataUrl) { const s = await api('GET', 'api/settings').catch(() => null); next.dataUrl = (s && s.dataUrl) || prevUrl || ''; }
     toast('Einstellungen gespeichert.');
   } catch (e) {
     toast(`Am Scanner nicht gespeichert: ${e.message}. Lokal übernommen.`, 'err');
@@ -1795,7 +1802,7 @@ async function saveSettings(ev) {
   S.settings = next;
   lsSet(LS_SET, next);
   renderSettings();
-  if (dataUrl !== prevUrl) await loadData(false);
+  if (next.dataUrl !== prevUrl) await loadData(false);
   else renderAll();
 }
 
