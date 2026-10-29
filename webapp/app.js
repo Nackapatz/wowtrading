@@ -849,8 +849,19 @@ function score(res, raw) {
     for (const t of nameTokens(de)) {
       for (const i of tix.get(t) || []) hit.add(i);
       // ab 6 Buchstaben unscharf (≤ 2 Fehler, gleicher Anfangsbuchstabe): „Krasise“ → Krosiss. Nur +10 und ohne Veto,
-      // weil deutsche Wörter englischen ähneln können (Log: „Stahlbart“ → Stalwart)
-      if (t.length >= 6 && !tix.has(t)) for (const [k, a] of tix) if (k[0] === t[0] && Math.abs(k.length - t.length) <= 2 && k.length >= 6 && lev(t, k, 2) <= 2) for (const i of a) fuzzy.add(i);
+      // weil deutsche Wörter englischen ähneln können (Log: „Stahlbart“ → Stalwart). Nur die nächsten Wörter zählen;
+      // ein abgeschnittener Name (Anfang mit ≤ 1 Fehler) gilt als 1,5: „Callst“ → Calister vor Caller.
+      if (t.length < 6 || tix.has(t)) continue;
+      let best = 3, near = [];
+      for (const [k, a] of tix) {
+        if (k[0] !== t[0] || k.length < 6) continue;
+        let d = Math.abs(k.length - t.length) <= 2 ? lev(t, k, 2) : 3;
+        if (k.length > t.length && k.length - t.length <= 4) d = Math.min(d, lev(t, k.slice(0, t.length), 1) + 0.5);
+        if (d > 2 || d > best) continue;
+        if (d < best) { best = d; near = []; }
+        near.push(a);
+      }
+      for (const a of near) for (const i of a) fuzzy.add(i);
     }
     if (hit.size && hit.size <= 12) for (const i of hit) add(idx.cards[i], 25, 'Tok');
     if (fuzzy.size && fuzzy.size <= 12) for (const i of fuzzy) if (!hit.has(i)) add(idx.cards[i], 10, 'Tok~');

@@ -467,6 +467,12 @@ async function main() {
     assert.ok(r.cand.some((c) => /Tok/.test(c.sig) && c.name === 'Sample Storm Hound'), JSON.stringify(r.cand));
     assert.equal(r.sure, false);
   });
+  await check('Abgeschnittener Eigenname („Trailbl“) zählt unscharf als Tok~', async () => {
+    await unlock();
+    const r = await frame({ name: 'Der Trailbl' }, { feed: false });
+    assert.ok(r.cand.some((c) => /Tok~/.test(c.sig) && c.name === 'Hulok Trailblazer'), JSON.stringify(r.cand));
+    assert.equal(r.sure, false);
+  });
   await check('Kombiniert: unsichere Nummer + Eigenname auf dieselbe Karte → Erfassung trotz eines verlesenen Werts', async () => {
     await unlock();
     const r = await frame({ strip: 'J RBETRAYER 163 LL', name: 'Der Hulok', hp: '5' }, { feed: false });

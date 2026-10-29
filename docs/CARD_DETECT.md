@@ -295,3 +295,8 @@ Mit 0.1.13: alle 9 „2×“-Erfassungen richtig, aber 4 Fehl-Erfassungen über 
 - Unscharfe Eigennamen („Tok~“) zählen nur +10, ohne Veto und nicht als Hinweis für „2×“ (Log: „Stahlbart“ → „Stalwart“).
 - Ein gelernter deutscher Name, der zu einer anderen Karte gehört, verhindert die automatische Erfassung wie ein Eigenname.
 - Offen: Das TCGplayer-Bild von Miner Steelwhiskers (21288) hat zur Karte keine Ähnlichkeit (Hamming 119–141).
+
+## Anpassungen nach dem achten Log (Firmware 0.1.15)
+
+- Unscharfe Eigennamen: Pro gelesenem Wort zählen nur die nächsten Treffer. Ein abgeschnittener Name, dessen Anfang mit höchstens einem Fehler passt, gilt als 1,5 Fehler (Log: „Callst“ ergab Caller statt Calister).
+- Firmware: Der HTTPS-Server hält höchstens 3 statt 5 wartende Verbindungen. Im Log fiel der freie Speicher bei mehreren gleichzeitigen Verbindungen auf 5,8 KB und die Seite war etwa 2 Minuten nicht erreichbar.

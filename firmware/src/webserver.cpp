@@ -502,7 +502,10 @@ void webserverBegin() {
     server.setCache(&sessionCache);
     server.setBufferSizes(TLS_RX_BUFFER, TLS_TX_BUFFER);
     server.setNoDelay(true);  // send each TLS record at once instead of waiting for Nagle
-    https.begin();
+    // Same as https.begin(), but with 3 instead of 5 pending connections: the phone opens several
+    // at once and each waiting one holds its ClientHello in RAM (minHeap fell to 5.8 KB in the log).
+    // Further connections wait for TCP's own retry instead.
+    server.begin(HTTPS_PORT, 3);
 
     httpRedirect.onNotFound(handleRedirectToHttps);
     httpRedirect.begin();
