@@ -28,6 +28,7 @@ function freshState() {
   return {
     scans: [],
     log: [],
+    fail: [], lastCid: null, lastScanId: null,
     nextId: 1,
     settings: { country: 'DE', currency: 'EUR', dataUrl: null }, // dataUrl wird pro Anfrage aus dem Host gesetzt
   };
@@ -109,8 +110,15 @@ async function api(req, res, url) {
     catch (e) { return sendErr(res, e.status || 400, e.message); }
     if (!rec || typeof rec !== 'object') return sendErr(res, 400, 'Body fehlt');
     if (state.scans.length >= MAX_SCANS) return sendErr(res, 507, 'Speicher voll (max. 2000 Scans)');
+    // Aussetzer wie am ESP: 'drop' = Verbindung bricht vor dem Speichern ab, 'lost' = gespeichert, Antwort geht verloren
+    const fail = state.fail.shift();
+    if (fail === 'drop') return req.socket.destroy();
+    const { cid, ...data } = rec;
+    if (cid && cid === state.lastCid) return send(res, 200, { ok: true, id: state.lastScanId });
     const id2 = state.nextId++;
-    state.scans.push({ ...rec, id: id2 });
+    state.scans.push({ ...data, id: id2 });
+    state.lastCid = cid; state.lastScanId = id2;
+    if (fail === 'lost') return req.socket.destroy();
     return send(res, 200, { ok: true, id: id2 });
   }
   if (url.pathname === '/api/settings') {
@@ -126,6 +134,12 @@ async function api(req, res, url) {
   if (req.method === 'POST' && url.pathname === '/api/update') {
     return sendErr(res, 501, 'OTA im Mock nicht unterstützt');
   }
+  if (req.method === 'POST' && url.pathname === '/__mock/fail') {
+    let b;
+    try { b = await readJson(req); } catch (e) { return sendErr(res, 400, e.message); }
+    state.fail = Array.isArray(b && b.scan) ? b.scan : [];
+    return send(res, 200, { ok: true });
+  }
   if (req.method === 'POST' && url.pathname === '/__mock/reset') {
     state = freshState();
     return send(res, 200, { ok: true });
@@ -136,7 +150,7 @@ async function api(req, res, url) {
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://x');
-    if (url.pathname.startsWith('/api/') || url.pathname === '/__mock/reset') return await api(req, res, url);
+    if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/__mock/')) return await api(req, res, url);
     if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
     if (url.pathname.startsWith('/sample-data/')) {
       const f = safeJoin(SAMPLE, decodeURIComponent(url.pathname.slice('/sample-data/'.length)));

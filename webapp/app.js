@@ -486,7 +486,7 @@ async function captureCard(card, opts = {}) {
   if (S.scans.length >= MAX_SCANS) { toast('Speicher voll: maximal 2000 Scans. Bitte Einträge löschen.', 'err'); return null; }
   const rec = buildRecord(card, { foil, cond, qty: opts.qty || 1, ocr: opts.ocr ?? null, number: opts.number || null, nameDe: opts.nameDe ? cleanDe(opts.nameDe) : null, matchInfo: opts.matchInfo || null });
   try {
-    const res = await api('POST', 'api/scan', rec);
+    const res = await postScan(rec);
     rec.id = res.id;
     S.lastWanted = { id: rec.id, wanted: S.ui.priceType };
     S.scans.unshift(rec);
@@ -500,6 +500,19 @@ async function captureCard(card, opts = {}) {
     const msg = e.status === 507 ? 'Speicher des Scanners voll (max. 2000 Scans).' : e.message;
     toast(`Speichern fehlgeschlagen: ${msg}`, 'err');
     return null;
+  }
+}
+/* Speichern mit Wiederholung: Der ESP bedient nur eine TLS-Verbindung und ist bei wenig Speicher kurz nicht
+ * erreichbar (Log 29.10.). cid: Kennung des Versuchs, der ESP verwirft eine Wiederholung, die schon gespeichert ist. */
+const SCAN_RETRY_MS = [1200, 2500];
+async function postScan(rec) {
+  const body = { ...rec, cid: Math.random().toString(36).slice(2, 10) };
+  for (let i = 0; ; i++) {
+    try { return await api('POST', 'api/scan', body); }
+    catch (e) {
+      if (e.status || i >= SCAN_RETRY_MS.length) throw e;   // HTTP-Fehler (z.B. 507) nicht wiederholen
+      await new Promise((r) => setTimeout(r, SCAN_RETRY_MS[i]));
+    }
   }
 }
 function feedback(rec) {
@@ -1926,6 +1939,7 @@ window.__wow = {
   // Zusammenführen mehrerer Standbilder (Tests): raws = Rohtexte je Standbild, keys = Kandidaten (k)
   mergeRaw: (raws, keys) => mergeRaw(raws, keys.map((k) => S.idx.byK.get(k)).filter(Boolean)),
   learned: () => ({ ...S.learned }),
+  capture: async (k) => { const r = await captureCard(S.idx.byK.get(k)); return r ? r.id : null; },
   importLearned,
   regions: () => Object.fromEntries(REGS.map((r) => [r, regBox(r)])),
   setFilter(v) { const sel = $('#setFilter'); sel.value = v; sel.dispatchEvent(new Event('change')); },

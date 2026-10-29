@@ -176,6 +176,19 @@ void handleScanPost() {
         return sendError(400, "bad_json");
     }
 
+    // The app repeats a POST whose answer got lost (cid = id of the attempt).
+    // A repeat of the last stored scan gets that scan's id instead of a second copy.
+    static String lastCid;
+    static uint32_t lastId = 0;
+    const String cid = scan["cid"] | "";
+    scan.remove("cid");
+    if (!cid.isEmpty() && cid == lastCid) {
+        JsonDocument response;
+        response["ok"] = true;
+        response["id"] = lastId;
+        return sendJson(200, response);
+    }
+
     uint32_t id = 0;
     switch (scansAppend(scan, id)) {
         case ScanStatus::Ok:
@@ -190,6 +203,8 @@ void handleScanPost() {
             return sendError(500, "unknown_status");
     }
 
+    lastCid = cid;
+    lastId = id;
     displayCard(makeCardView(scan), CARD_HOLD_MS);
     displayIdle(currentIp(), scansCount());
 

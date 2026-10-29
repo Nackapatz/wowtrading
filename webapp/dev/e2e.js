@@ -424,6 +424,18 @@ async function main() {
     assert.equal(await scanCount(), before);
     assert.deepEqual(await page.evaluate(() => window.__wow.learned()), { 'Hulok Wegbereiter': 'sotb-163' });
   });
+  await check('Speichern: Aussetzer des Scanners wird wiederholt, ohne Doppel-Eintrag', async () => {
+    const before = await scanCount();
+    await api('POST', '/__mock/fail', { scan: ['drop'] });
+    const id1 = await page.evaluate(() => window.__wow.capture('sotb-163'));
+    assert.ok(id1, 'drop: zweiter Versuch speichert');
+    assert.equal(await scanCount(), before + 1);
+    await api('POST', '/__mock/fail', { scan: ['lost'] });
+    const id2 = await page.evaluate(() => window.__wow.capture('sotb-163'));
+    assert.equal(await scanCount(), before + 2, 'lost: gespeichert, Wiederholung erkannt');
+    assert.equal(id2, (await lastRec()).id);
+    assert.equal((await lastRec()).cid, undefined, 'cid wird nicht gespeichert');
+  });
   await check('Kombiniert: OCR liest 153 statt 163 → die Werte korrigieren die Ziffer, Erfassung', async () => {
     await unlock();
     const before = await scanCount();
