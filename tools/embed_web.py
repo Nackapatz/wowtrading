@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Embed the web app into the firmware.
 
-Reads webapp/index.html, webapp/app.js, webapp/arthash.js and webapp/style.css, gzips every file
-and writes firmware/include/web_assets.h: one PROGMEM byte array per file, its
+Reads webapp/index.html, webapp/app.js, webapp/arthash.js, webapp/carddetect.js and webapp/style.css,
+inlines the stylesheet and the scripts into index.html, gzips it and writes
+firmware/include/web_assets.h: one PROGMEM byte array per served file, its
 length, and a table that maps served paths to MIME types.
+
+One file instead of five: the ESP serves one TLS connection at a time, and a
+browser opening five at once got some of them reset (log 29.10., firmware 0.1.15).
 
 A missing source file is replaced by a small placeholder, so the firmware
 still builds before the web app exists.
@@ -23,9 +27,14 @@ OUTPUT = ROOT / "firmware" / "include" / "web_assets.h"
 # (source file, served paths, MIME type, C identifier stem)
 ASSETS = [
     ("index.html", ("/", "/index.html"), "text/html; charset=utf-8", "WEB_INDEX_HTML"),
-    ("app.js", ("/app.js",), "application/javascript; charset=utf-8", "WEB_APP_JS"),
-    ("arthash.js", ("/arthash.js",), "application/javascript; charset=utf-8", "WEB_ARTHASH_JS"),
-    ("style.css", ("/style.css",), "text/css; charset=utf-8", "WEB_STYLE_CSS"),
+]
+
+# Tags in index.html that are replaced by the file's content (the dev server serves them separately).
+INLINED = [
+    ('<link rel="stylesheet" href="style.css">', "style.css", "style"),
+    ('<script src="arthash.js"></script>', "arthash.js", "script"),
+    ('<script src="carddetect.js"></script>', "carddetect.js", "script"),
+    ('<script src="app.js"></script>', "app.js", "script"),
 ]
 
 PLACEHOLDERS = {
@@ -41,24 +50,45 @@ PLACEHOLDERS = {
     ),
     "app.js": "// placeholder: webapp/app.js was not available at build time\n",
     "arthash.js": "// placeholder: webapp/arthash.js was not available at build time\n",
+    "carddetect.js": "// placeholder: webapp/carddetect.js was not available at build time\n",
     "style.css": "/* placeholder: webapp/style.css was not available at build time */\n",
 }
 
-# Soft budget from SPEC section 2: all web app files together gzip to < 40 KB.
-SIZE_BUDGET = 40 * 1024
+# Soft budget: all web app files together gzip to < 56 KB (flash has room; raised for card detection).
+SIZE_BUDGET = 56 * 1024
+
+
+def read_source(name: str) -> tuple[str, str]:
+    """Return (text, source description) for one webapp file, or its placeholder."""
+    path = WEBAPP_DIR / name
+    if path.is_file():
+        return path.read_text(encoding="utf-8"), str(path.relative_to(ROOT))
+    return PLACEHOLDERS[name], "placeholder (webapp/%s fehlt)" % name
+
+
+def inline_assets(html: str) -> str:
+    """Replace the stylesheet and script tags with inline <style>/<script> blocks."""
+    for tag, name, element in INLINED:
+        if tag not in html:
+            if html == PLACEHOLDERS["index.html"]:
+                continue
+            # the served page would reference a file the firmware no longer serves
+            raise SystemExit("embed_web: %s not found in index.html, cannot inline %s" % (tag, name))
+        text, _ = read_source(name)
+        if ("</" + element) in text.lower():
+            raise SystemExit("embed_web: %s contains </%s> and cannot be inlined" % (name, element))
+        html = html.replace(tag, "<%s>\n%s\n</%s>" % (element, text, element), 1)
+    return html
 
 
 def load_gzipped(name: str) -> tuple[bytes, str]:
-    """Return (gzip bytes, source description) for one webapp file."""
-    path = WEBAPP_DIR / name
-    if path.is_file():
-        raw = path.read_bytes()
-        source = str(path.relative_to(ROOT))
-    else:
-        raw = PLACEHOLDERS[name].encode("utf-8")
-        source = "placeholder (webapp/%s fehlt)" % name
+    """Return (gzip bytes, source description) for one served file."""
+    text, source = read_source(name)
+    if name == "index.html":
+        text = inline_assets(text)
+        source += " (+ " + ", ".join(n for _, n, _ in INLINED) + " inline)"
     # mtime=0 keeps the output reproducible across builds.
-    return gzip.compress(raw, compresslevel=9, mtime=0), source
+    return gzip.compress(text.encode("utf-8"), compresslevel=9, mtime=0), source
 
 
 def c_byte_array(identifier: str, data: bytes) -> str:
@@ -127,7 +157,7 @@ def main() -> int:
             OUTPUT.relative_to(ROOT),
             "updated" if changed else "unchanged",
             total,
-            "" if total < SIZE_BUDGET else "  WARNING: exceeds 40 KB budget",
+            "" if total < SIZE_BUDGET else "  WARNING: exceeds 56 KB budget",
         )
     )
     return 0

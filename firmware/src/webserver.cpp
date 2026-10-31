@@ -6,9 +6,11 @@
 #include <ESP8266WebServerSecure.h>
 #include <ESP8266WiFi.h>
 #include <LittleFS.h>
+#include <StackThunk.h>
 
 #include "config.h"
 #include "display.h"
+#include "health.h"
 #include "ota.h"
 #include "scans.h"
 #include "util.h"
@@ -36,8 +38,11 @@ BearSSL::ServerSessions sessionCache(5);
 BearSSL::X509List* g_chain = nullptr;
 BearSSL::PrivateKey* g_privateKey = nullptr;
 
-// Headers the OTA handler reads with header(); they must be collected before begin().
-const char* kCollectedHeaders[] = {"X-OTA-Pass", "Content-Length"};
+// Time of the last HTTPS request, for the health checks (health.cpp).
+uint32_t g_lastRequestMs = 0;
+
+// Headers read with header() (OTA upload, asset ETag); they must be collected before begin().
+const char* kCollectedHeaders[] = {"X-OTA-Pass", "Content-Length", "If-None-Match"};
 
 String currentIp() {
     return WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : String();
@@ -107,9 +112,18 @@ CardView makeCardView(JsonDocument& scan) {
 constexpr size_t kAssetChunk = 1024;
 constexpr uint32_t kAssetStallMs = 10000;
 
+// The assets only change with a new build, so the build time is the ETag. With
+// "no-cache" the browser asks every time and gets a 304 without a body.
+const char kAssetEtag[] = "\"" FW_VERSION "-" __DATE__ " " __TIME__ "\"";
+
 void sendAsset(const WebAsset& asset) {
-    https.sendHeader("Content-Encoding", "gzip");
+    https.sendHeader("ETag", kAssetEtag);
     https.sendHeader("Cache-Control", "no-cache");
+    if (https.header("If-None-Match") == kAssetEtag) {
+        https.send(304);
+        return;
+    }
+    https.sendHeader("Content-Encoding", "gzip");
     https.setContentLength(asset.length);
     https.send(200, asset.mime, "");
 
@@ -139,6 +153,13 @@ void handleStatus() {
     doc["hostname"] = gConfig.hostname;
     doc["scans"] = scansCount();
     doc["freeHeap"] = ESP.getFreeHeap();
+    doc["maxBlock"] = ESP.getMaxFreeBlockSize();
+    doc["heapFrag"] = ESP.getHeapFragmentation();
+    doc["minHeap"] = healthMinFreeHeap();
+    doc["rssi"] = WiFi.RSSI();
+    doc["wifiDrops"] = healthWifiDrops();
+    doc["resetReason"] = ESP.getResetReason();
+    doc["bootInfo"] = healthBootInfo();
     doc["uptime"] = millis() / 1000;
     doc["country"] = gConfig.country;
     doc["currency"] = gConfig.currency;
@@ -155,6 +176,19 @@ void handleScanPost() {
         return sendError(400, "bad_json");
     }
 
+    // The app repeats a POST whose answer got lost (cid = id of the attempt).
+    // A repeat of the last stored scan gets that scan's id instead of a second copy.
+    static String lastCid;
+    static uint32_t lastId = 0;
+    const String cid = scan["cid"] | "";
+    scan.remove("cid");
+    if (!cid.isEmpty() && cid == lastCid) {
+        JsonDocument response;
+        response["ok"] = true;
+        response["id"] = lastId;
+        return sendJson(200, response);
+    }
+
     uint32_t id = 0;
     switch (scansAppend(scan, id)) {
         case ScanStatus::Ok:
@@ -169,6 +203,8 @@ void handleScanPost() {
             return sendError(500, "unknown_status");
     }
 
+    lastCid = cid;
+    lastId = id;
     displayCard(makeCardView(scan), CARD_HOLD_MS);
     displayIdle(currentIp(), scansCount());
 
@@ -178,19 +214,87 @@ void handleScanPost() {
     sendJson(200, response);
 }
 
-// Streams the stored scans. The array is sent with chunked transfer encoding,
-// so the file never has to fit in RAM.
+// Streams the stored scans as one JSON array. A first pass over the file gives
+// the exact length, so the body goes out with Content-Length in ~1.4 KB blocks.
+// (Chunked mode sent three TLS records per scan, each waiting for its ACK; with
+// a few hundred scans that took minutes and blocked the server.)
+constexpr size_t kScanBlock = 1400;
+char g_scanBlock[kScanBlock];
+
 void handleScansGet() {
+    size_t total = 0;
+    scansStream([&](const char*, size_t length) { total += length; });
+
     https.sendHeader("Cache-Control", "no-store");
-    // Chunked mode needs HTTP/1.1; the core refuses it for HTTP/1.0 clients.
-    if (!https.chunkedResponseModeStart(200, "application/json; charset=utf-8")) {
-        return sendError(505, "http11_required");
-    }
-    scansStream([](const char* data, size_t length) {
-        https.sendContent(data, length);
-        yield();
+    https.setContentLength(total);
+    https.send(200, "application/json; charset=utf-8", "");
+
+    auto& client = https.client();
+    size_t used = 0;
+    bool ok = true;
+    auto flushBlock = [&]() {
+        if (ok && used > 0 && client.write(reinterpret_cast<const uint8_t*>(g_scanBlock), used) != used) ok = false;
+        used = 0;
+    };
+    scansStream([&](const char* data, size_t length) {
+        while (ok && length > 0) {
+            const size_t n = length < kScanBlock - used ? length : kScanBlock - used;
+            memcpy(g_scanBlock + used, data, n);
+            used += n;
+            data += n;
+            length -= n;
+            if (used == kScanBlock) flushBlock();
+        }
     });
-    https.chunkedResponseFinalize();
+    flushBlock();
+}
+
+// Sends a LittleFS file with Content-Length in blocks (empty body if it is missing).
+void sendFile(const char* path, const char* mime) {
+    File file = LittleFS.open(path, "r");
+    https.sendHeader("Cache-Control", "no-store");
+    https.setContentLength(file ? file.size() : 0);
+    https.send(200, mime, "");
+    if (!file) return;
+    auto& client = https.client();
+    while (file.available() > 0) {
+        const int n = file.read(reinterpret_cast<uint8_t*>(g_scanBlock), kScanBlock);
+        if (n <= 0 || client.write(reinterpret_cast<const uint8_t*>(g_scanBlock), n) != static_cast<size_t>(n)) break;
+    }
+    file.close();
+}
+
+// Recognition log: the app posts one JSON line per evaluation, for debugging
+// from a PC (GET /api/log, ?old=1 for the rotated file, DELETE clears).
+void handleLogPost() {
+    const String body = https.arg("plain");
+    if (body.isEmpty() || body.length() > MAX_LOG_BODY || body.indexOf('\n') >= 0) return sendError(400, "bad_body");
+    File file = LittleFS.open(LOG_FILE, "a");
+    if (!file) return sendError(500, "io_error");
+    const bool ok = file.print(body) == body.length() && file.write('\n') == 1;
+    const size_t size = file.size();
+    file.close();
+    if (size > LOG_MAX_BYTES) {
+        LittleFS.remove(LOG_OLD_FILE);
+        LittleFS.rename(LOG_FILE, LOG_OLD_FILE);
+    }
+    if (!ok) return sendError(500, "io_error");
+    sendOk();
+}
+
+void handleLogGet() {
+    sendFile(https.hasArg("old") ? LOG_OLD_FILE : LOG_FILE, "application/x-ndjson");
+}
+
+// Crash records written at boot (health.cpp), one JSON line each.
+void handleCrashGet() {
+    sendFile(CRASH_FILE, "application/x-ndjson");
+}
+
+void handleLogDelete() {
+    LittleFS.remove(LOG_FILE);
+    LittleFS.remove(LOG_OLD_FILE);
+    sendOk();
 }
 
 bool readIdArg(uint32_t& id) {
@@ -356,6 +460,10 @@ void registerRoutes() {
     https.on("/api/scans", HTTP_DELETE, handleScansDelete);
     https.on("/api/settings", HTTP_GET, handleSettingsGet);
     https.on("/api/settings", HTTP_POST, handleSettingsPost);
+    https.on("/api/log", HTTP_POST, handleLogPost);
+    https.on("/api/log", HTTP_GET, handleLogGet);
+    https.on("/api/log", HTTP_DELETE, handleLogDelete);
+    https.on("/api/crash", HTTP_GET, handleCrashGet);
     https.on("/api/update", HTTP_POST, handleUpdateDone, handleUpdateUpload);
     https.onNotFound(handleNotFound);
 }
@@ -380,10 +488,24 @@ void webserverBegin() {
 
     https.collectHeaders(kCollectedHeaders, sizeof(kCollectedHeaders) / sizeof(kCollectedHeaders[0]));
     registerRoutes();
+    https.addHook([](const String&, const String&, WiFiClient*, BearSSL::ESP8266WebServerSecure::ContentTypeFunction) {
+        g_lastRequestMs = millis();
+        return BearSSL::ESP8266WebServerSecure::CLIENT_REQUEST_CAN_CONTINUE;
+    });
 
-    https.getServer().setECCert(g_chain, BR_KEYTYPE_KEYX | BR_KEYTYPE_SIGN, g_privateKey);
-    https.getServer().setCache(&sessionCache);
-    https.begin();
+    // Keep BearSSL's 6 KB stack allocated for good. Otherwise it is freed and
+    // re-allocated around every connection, which fragments the heap over days.
+    stack_thunk_add_ref();
+
+    BearSSL::WiFiServerSecure& server = https.getServer();
+    server.setECCert(g_chain, BR_KEYTYPE_KEYX | BR_KEYTYPE_SIGN, g_privateKey);
+    server.setCache(&sessionCache);
+    server.setBufferSizes(TLS_RX_BUFFER, TLS_TX_BUFFER);
+    server.setNoDelay(true);  // send each TLS record at once instead of waiting for Nagle
+    // Same as https.begin(), but with 3 instead of 5 pending connections: the phone opens several
+    // at once and each waiting one holds its ClientHello in RAM (minHeap fell to 5.8 KB in the log).
+    // Further connections wait for TCP's own retry instead.
+    server.begin(HTTPS_PORT, 3);
 
     httpRedirect.onNotFound(handleRedirectToHttps);
     httpRedirect.begin();
@@ -392,4 +514,8 @@ void webserverBegin() {
 void webserverLoop() {
     https.handleClient();
     httpRedirect.handleClient();
+}
+
+uint32_t webserverIdleMs() {
+    return millis() - g_lastRequestMs;
 }

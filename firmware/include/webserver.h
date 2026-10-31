@@ -10,3 +10,6 @@ void webserverBegin();
 
 // Call from loop().
 void webserverLoop();
+
+// Milliseconds since the last HTTPS request (since boot if there was none).
+uint32_t webserverIdleMs();

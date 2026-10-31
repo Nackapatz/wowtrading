@@ -448,6 +448,19 @@ def _attach_product(entry: dict, product: Mapping) -> None:
         entry["r"] = product.get("r")
 
 
+def _spelling_variant(a: str, b: str) -> bool:
+    """Gleicher Name mit höchstens 2 Tippfehlern (normierte Namen ab 8 Zeichen, gleicher Anfang)."""
+    if a == b or min(len(a), len(b)) < 8 or abs(len(a) - len(b)) > 2 or a[0] != b[0]:
+        return False
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1] <= 2
+
+
 def build_cards_v2(
     db: CardDb, products: Sequence[Mapping]
 ) -> tuple[list[dict], list[dict], dict[str, int]]:
@@ -488,6 +501,7 @@ def build_cards_v2(
 
     # Produkte verknüpfen; Namen ohne Klammerzusatz zuerst (Basisprodukt vor "(LOOT)")
     extra: list[dict] = []
+    unnamed: list[Mapping] = []
     linked = ambiguous = 0
     ordered = sorted(products, key=lambda p: (has_suffix(p.get("n")), str(p.get("p"))))
     for product in ordered:
@@ -508,7 +522,38 @@ def build_cards_v2(
             ambiguous += 1
             log.info("Produkt %s '%s' mehrdeutig (%d DB-Karten), unverknüpft",
                      product.get("p"), product.get("n"), len(hits))
-        extra.append(_tcg_entry(product))
+            extra.append(_tcg_entry(product))
+        else:
+            unnamed.append(product)
+
+    # Zweiter Durchgang: Schreibweise weicht ab („Najan Spiritbinder“ in der DB, „Spiritbender“ bei TCGplayer).
+    # Nur auf DB-Karten ohne Produkt, nur bei genau einem Kandidaten, und nur wenn kein anderes Produkt dieselbe Karte will.
+    names_by_set: dict[int, list[tuple[str, list[int]]]] = defaultdict(list)
+    for (sid, n), cids in name_index.items():
+        names_by_set[sid].append((n, cids))
+    claims: dict[int, list[Mapping]] = defaultdict(list)
+    for product in unnamed:
+        name = norm_name(product.get("n"))
+        cands = {cid for s in group_sets.get(product.get("g"), []) for n, cids in names_by_set[s.id]
+                 if _spelling_variant(name, n) for cid in cids if entries[cid]["p"] is None}
+        if len(cands) == 1:
+            claims[next(iter(cands))].append(product)
+    fuzzy_linked = set()
+    for cid, prods in claims.items():
+        prods = sorted(prods, key=lambda p: (has_suffix(p.get("n")), str(p.get("p"))))
+        if sum(not has_suffix(p.get("n")) for p in prods) > 1:
+            continue  # zwei verschiedene Produkte für eine Karte: lieber unverknüpft
+        entry = entries[cid]
+        log.info("Produkt %s '%s' per Schreibweise mit DB-Karte '%s' verknüpft",
+                 prods[0].get("p"), prods[0].get("n"), entry["n"])
+        _attach_product(entry, prods[0])
+        for product in prods[1:]:  # "(LOOT)" usw. wie oben als eigener Eintrag
+            dup = dict(entry, k=f"p{product['p']}", n=product.get("n") or entry["n"])
+            _attach_product(dup, product)
+            extra.append(dup)
+        fuzzy_linked.update(p["p"] for p in prods)
+    linked += len(fuzzy_linked)
+    extra.extend(_tcg_entry(p) for p in unnamed if p["p"] not in fuzzy_linked)
 
     sets_out = [
         {"id": s.id, "n": s.name, "w": s.word, "tot": s.tot, "g": sorted(set_groups.get(s.id, ()), key=str)}

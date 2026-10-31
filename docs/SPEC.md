@@ -69,14 +69,15 @@ README.md (Deutsch)
 - mDNS: `<hostname>.local`.
 - ArduinoOTA mit `otaPass` (Port 8266).
 - API (alle JSON, UTF-8):
-  - `GET /` → `index.html` (gzip, `Content-Encoding: gzip`), `GET /app.js`, `GET /style.css` analog. Cache-Control: `no-cache`.
+  - `GET /` → `index.html` (gzip, `Content-Encoding: gzip`) mit `style.css`, `arthash.js`, `carddetect.js` und `app.js` inline: eine Anfrage statt fünf, weil der ESP nur eine TLS-Verbindung gleichzeitig bedient. Cache-Control: `no-cache`, ETag = Build-Zeit.
   - `GET /api/status` → `{version, ip, hostname, scans, freeHeap, uptime, country, currency, dataUrl}`
   - `POST /api/scan` Body = Scan-Datensatz (siehe unten, max 2 KB). Firmware vergibt `id` (fortlaufend) und speichert als eine Zeile in `/scans.jsonl`. Antwort `{ok:true,id}`. Zeigt Karteninfo auf dem OLED.
   - `GET /api/scans` → JSON-Array, gestreamt (chunked oder per Content-Length nach Dateigröße), nicht komplett in RAM laden.
   - `PATCH /api/scans?id=N` Body `{qty}` → Menge ändern (Datei umschreiben über Temp-Datei).
   - `DELETE /api/scans?id=N` → einzelnen Eintrag löschen; `DELETE /api/scans` → alle löschen.
   - `GET /api/settings`, `POST /api/settings` Body `{country, currency, dataUrl}`.
-  - `POST /api/update` multipart-Upload einer `.bin` → OTA (Header `X-OTA-Pass` muss `otaPass` entsprechen). Antwort, dann Neustart.
+  - `POST /api/update` multipart-Upload einer `.bin` → OTA (Header `X-OTA-Pass` muss `otaPass` entsprechen). Antwort, dann Neustart. Seit 0.1.4 nimmt der TLS-Server nur Records bis 6 KB an (mehr freier Speicher). Browser und curl schicken Uploads in 16-KB-Records, deshalb geht das Update in der Praxis über ArduinoOTA (Port 8266).
+- Dauerbetrieb (seit 0.1.4, `health.cpp`): WLAN-Modem-Sleep aus. Neustart, wenn das WLAN 5 Minuten weg ist, wenn im Leerlauf der größte freie Heap-Block 1 Minute lang unter 8 KB liegt, und einmal täglich nach 10 Minuten ohne Anfrage. `/api/status` liefert zusätzlich `maxBlock`, `heapFrag`, `minHeap`, `rssi`, `wifiDrops` und `resetReason`. `POST/GET/DELETE /api/log` (seit 0.1.6): Erkennungs-Log der App, eine JSON-Zeile je Auswertung, rotiert bei 32 KB (`?old=1` liefert die vorige Datei). Web-App-Dateien haben seit 0.1.5 ein ETag (Build-Zeit): Ein Neuladen bekommt 304 ohne Inhalt. Absturz-Diagnose (seit 0.1.9): Beim Start schreibt `healthBoot()` nach einer Exception, einem Watchdog-Reset oder einem eigenen Neustart (WLAN weg, Speicher knapp, Wartung) eine JSON-Zeile nach `/crash.log` (`GET /api/crash`, ab 4 KB neu begonnen): Grund, `epc`, `exc`/`excvaddr`, Code-Adressen vom Stack (`bt`, über `custom_crash_callback` im RTC-Speicher gesichert, mit `addr2line -e firmware.elf` auflösbar) und den letzten Stand vor dem Reset (`prevUp`, `prevMinHeap`, `prevMaxBlock`, `prevIdle`, alle 10 s im RTC-Speicher). `/api/status` liefert dazu `bootInfo`, z.B. „Exception 28 @0x40212345“. `POST /api/scan` (seit 0.1.9): Die App wiederholt einen Speicherversuch ohne Antwort zweimal (nach 1,2 s und 2,5 s) und schickt dabei dieselbe Kennung `cid` mit. Der ESP speichert `cid` nicht und beantwortet eine Wiederholung des zuletzt gespeicherten Scans mit dessen `id`, statt ihn doppelt anzulegen.
   - Limit: max. 2000 Scans; danach 507 mit Fehlermeldung.
 - Scan-Datensatz (Feldnamen exakt so): `id, ts (ISO-8601, vom Handy), productId, name, set, setCode, number, rarity, type, cardClass, faction, cost, atk, health, foil (bool), condition, qty, priceUsd, price, currency, priceType ("market"|"low"|"mid"), priceDate, source ("TCGplayer via tcgcsv.com"), url, imageUrl, ocrConfidence`.
 - Watchdog beachten: `yield()` in langen Schleifen; keine Strings > wenige KB im RAM.
@@ -98,7 +99,7 @@ README.md (Deutsch)
 - Sammlungsansicht: Liste aller Scans (vom ESP), Menge ändern, löschen, Summen: Anzahl Karten, Gesamtwert, Wert pro Set, pro Seltenheit, Top-10 teuerste.
 - Export: CSV (Semikolon, UTF-8 mit BOM, Dezimalkomma bei EUR für Excel DE), JSON, und Kurzbericht als Text (Zusammenfassung zum Teilen). Download per Blob; zusätzlich Web Share API, wenn verfügbar.
 - Fehlerfälle: keine Kamera/kein HTTPS → klare Meldung mit Anleitung (Zertifikat akzeptieren); keine Internetverbindung fürs Laden der Daten → Meldung, gecachte Daten nutzen.
-- Größe: alle drei Dateien zusammen gzip < 40 KB.
+- Größe: alle Web-App-Dateien zusammen gzip < 56 KB (Flash hat Platz; erhöht für die Kartenrand-Erkennung).
 
 ## 3. Daten-Pipeline (data-pipeline/build_data.py)
 

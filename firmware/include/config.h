@@ -22,6 +22,25 @@ constexpr uint16_t HTTPS_PORT = 443;
 constexpr uint16_t HTTP_REDIRECT_PORT = 80;
 constexpr uint32_t WIFI_RETRY_MS = 30000;  // retry / WOWSCAN:WIFIFAIL interval
 
+// TLS record buffers. BearSSL's default input buffer takes 16 KB records, but the
+// app never sends more than a request plus a 2 KB scan, and browsers send small
+// records. 6 KB in / 2 KB out leaves ~10 KB more heap during a connection, and the
+// larger output records need fewer round trips than the core's 837 bytes.
+// Uploads over HTTPS (/api/update) need 16 KB records; OTA goes through ArduinoOTA.
+constexpr int TLS_RX_BUFFER = 6144 + 325;
+constexpr int TLS_TX_BUFFER = 2048 + 85;
+
+// ---------------------------------------------------------------------------
+// Long-term health (main.cpp)
+// ---------------------------------------------------------------------------
+constexpr uint32_t HEALTH_CHECK_MS = 10000;          // how often the checks below run
+constexpr uint32_t WIFI_DOWN_RESTART_MS = 5UL * 60 * 1000;     // no WLAN this long -> restart
+constexpr uint32_t LOW_HEAP_BLOCK = 8 * 1024;       // largest free block below this ...
+constexpr uint8_t LOW_HEAP_CHECKS = 6;              // ... in this many idle checks in a row -> restart
+constexpr uint32_t MAINT_RESTART_MS = 24UL * 60 * 60 * 1000;   // planned restart after a day ...
+constexpr uint32_t MAINT_IDLE_MS = 10UL * 60 * 1000;           // ... once no request came in for 10 min
+constexpr uint32_t BUSY_IDLE_MS = 15000;            // a request within this time counts as "in use"
+
 // ---------------------------------------------------------------------------
 // Storage paths in LittleFS
 // ---------------------------------------------------------------------------
@@ -30,6 +49,12 @@ constexpr char CERT_FILE[] = "/cert.pem";
 constexpr char KEY_FILE[] = "/key.pem";
 constexpr char SCANS_FILE[] = "/scans.jsonl";
 constexpr char SCANS_TMP_FILE[] = "/scans.tmp";
+constexpr char LOG_FILE[] = "/log.jsonl";       // recognition log from the app (POST /api/log)
+constexpr char LOG_OLD_FILE[] = "/log.old";     // previous log after rotation
+constexpr size_t LOG_MAX_BYTES = 32 * 1024;     // rotate above this size
+constexpr size_t MAX_LOG_BODY = 1536;           // POST /api/log body limit
+constexpr char CRASH_FILE[] = "/crash.log";     // one JSON line per unplanned reset or watchdog restart (GET /api/crash)
+constexpr size_t CRASH_MAX_BYTES = 4 * 1024;    // start over above this size
 
 constexpr size_t MAX_SCANS = 2000;
 constexpr size_t MAX_SCAN_BODY = 2048;   // POST /api/scan body limit

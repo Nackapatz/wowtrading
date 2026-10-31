@@ -4,6 +4,8 @@
 - webapp/dev/sample-data/img/<productId>.png (200x279, Pixel aus Formeln, deterministisch)
 - webapp/dev/sample-data/hashes.json (artHash/artColor mit data-pipeline/arthash.py)
 - webapp/dev/sample-data/camera.y4m (Kamerabild mit Sample-Karte im Overlay-Rahmen, für Chromiums Fake-Kamera)
+- webapp/dev/sample-data/camera-offset.y4m (kleinere, versetzte, um 4° gedrehte Sample-Karte auf texturiertem Hintergrund)
+- webapp/dev/sample-data/camera-unknown.y4m (Karte, die nicht in der Datenbank steht: kein Treffer, Standbild-Zusammenführung)
 
 Nachdrucke (gleicher Name in anderem Set, "(Foil)"-Variante) bekommen dieselbe Illustration.
 Eine Karte (900024) bleibt absichtlich ohne Hash, Karten ohne productId (p = null) haben kein Bild. Aufruf: python3 webapp/dev/make_sample_art.py
@@ -12,6 +14,7 @@ Eine Karte (900024) bleibt absichtlich ohne Hash, Karten ohne productId (p = nul
 from __future__ import annotations
 
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -26,6 +29,9 @@ W, H = 200, 279
 SAME_ART = {900016: 900001, 900017: 900009, 900026: 900011, 900032: 900031}   # Nachdrucke → Illustration des Originals
 NO_HASH = {900024}
 CAMERA_CARD = 900003
+CAMERA_OFFSET_CARD = 900005
+UNKNOWN_ART = 777777     # Illustration ohne Eintrag in hashes.json und cards.json
+BG = (118, 112, 104)     # Tisch hinter der Karte: der dunkle Kartenrand muss sich davon abheben (CARD_DETECT.md)
 
 
 def lcg(seed: int):
@@ -74,7 +80,7 @@ def card_pixels(art_id: int) -> bytes:
     return bytes(out)
 
 
-def write_y4m(path: Path, card_png: Path, fw: int = 360, fh: int = 480) -> None:
+def write_y4m(path: Path, card: Image.Image, fw: int = 360, fh: int = 480) -> None:
     """Einzelbild-Y4M (YUV 4:2:0): Sample-Karte im Bereich, den das Overlay bei 390 px Breite markiert."""
     # Layout der App bei 390x844: Kamerafeld 358x477,33 px (3:4), Rahmen = 74 % der Höhe, 63:88.
     cw, ch = 358.0, 358.0 * 4 / 3
@@ -82,9 +88,8 @@ def write_y4m(path: Path, card_png: Path, fw: int = 360, fh: int = 480) -> None:
     gw = gh * 63 / 88
     s = max(cw / fw, ch / fh)
     gx, gy = ((cw - gw) / 2 - (cw - fw * s) / 2) / s, ((ch - gh) / 2 - (ch - fh * s) / 2) / s
-    frame = Image.new("RGB", (fw, fh), (25, 25, 25))
-    with Image.open(card_png) as card:
-        frame.paste(card.convert("RGB").resize((round(gw / s), round(gh / s)), Image.BILINEAR), (round(gx), round(gy)))
+    frame = Image.new("RGB", (fw, fh), BG)
+    frame.paste(card.convert("RGB").resize((round(gw / s), round(gh / s)), Image.BILINEAR), (round(gx), round(gy)))
     ycc = frame.convert("YCbCr")
     y, cb, cr = ycc.split()
     cb = cb.resize((fw // 2, fh // 2), Image.BILINEAR)
@@ -92,6 +97,72 @@ def write_y4m(path: Path, card_png: Path, fw: int = 360, fh: int = 480) -> None:
     with open(path, "wb") as f:
         f.write(f"YUV4MPEG2 W{fw} H{fh} F10:1 Ip A1:1 C420jpeg\n".encode())
         f.write(b"FRAME\n" + y.tobytes() + cb.tobytes() + cr.tobytes())   # 1 Bild, Chromium wiederholt die Datei
+
+
+def textured_background(fw: int, fh: int) -> Image.Image:
+    """Tisch mit Wellenmuster und leichtem Rauschen, deterministisch."""
+    rnd = lcg(4242)
+    out = bytearray()
+    for y in range(fh):
+        for x in range(fw):
+            base = 118 + 14 * math.sin(x / 9.0) * math.cos(y / 13.0) + 10 * math.sin((x + y) / 5.0)
+            v = max(0, min(255, int(base + next(rnd) % 9 - 4)))
+            out += bytes((v, v - 4, v - 10))
+    return Image.frombytes("RGB", (fw, fh), bytes(out))
+
+
+def write_y4m_offset(path: Path, card: Image.Image, fw: int = 360, fh: int = 480) -> None:
+    """Kleinere Karte (202 px statt Overlay 253 px), um 14/10 px aus der Mitte versetzt und 4° gedreht."""
+    frame = textured_background(fw, fh)
+    c = card.convert("RGBA").resize((202, 283), Image.BILINEAR).rotate(4, resample=Image.BICUBIC, expand=True)
+    frame.paste(c, (round(fw / 2 + 14 - c.width / 2), round(fh / 2 - 10 - c.height / 2)), c)
+    ycc = frame.convert("YCbCr")
+    y, cb, cr = ycc.split()
+    cb = cb.resize((fw // 2, fh // 2), Image.BILINEAR)
+    cr = cr.resize((fw // 2, fh // 2), Image.BILINEAR)
+    with open(path, "wb") as f:
+        f.write(f"YUV4MPEG2 W{fw} H{fh} F10:1 Ip A1:1 C420jpeg\n".encode())
+        f.write(b"FRAME\n" + y.tobytes() + cb.tobytes() + cr.tobytes())
+
+
+def wood_photo_background(w: int, h: int, seed: int = 5150) -> Image.Image:
+    """Holztisch: waagerechte Bretter mit unterschiedlicher Farbe, Maserung und Rauschen, deterministisch."""
+    out = bytearray()
+    rnd = lcg(seed)
+    plank_h = 150
+    cols = {}
+    for y in range(h):
+        plank = y // plank_h
+        if plank not in cols:
+            pr = lcg(seed + plank)
+            cols[plank] = (120 + next(pr) % 35, 78 + next(pr) % 25, 46 + next(pr) % 20)
+        r0, g0, b0 = cols[plank]
+        for x in range(w):
+            grain = math.sin((x + 60 * math.sin(y / 37.0)) / 9.0 + plank) * 0.5 + 0.5
+            k = 0.82 + 0.18 * grain + (next(rnd) % 9 - 4) / 255.0
+            out += bytes((max(0, min(255, int(r0 * k))), max(0, min(255, int(g0 * k))), max(0, min(255, int(b0 * k)))))
+    return Image.frombytes("RGB", (w, h), bytes(out))
+
+
+def write_photos(out_dir: Path, card_img: Image.Image, neighbour_img: Image.Image) -> None:
+    """Handyfoto-ähnliche Bilder (1600×1200, JPEG) für den Galerie-Test: Karte ca. 35 % der Bildhöhe, 6° gedreht,
+    Holztisch, Nachbarkarte am rechten Rand. photo-nocard.jpg zeigt nur die Textur."""
+    from PIL import ImageFilter
+    W_, H_ = 1600, 1200
+    bg = wood_photo_background(W_, H_)
+    ch = round(0.35 * H_)                                   # 420 px
+    cw = round(ch * 63 / 88)
+    nb = neighbour_img.convert("RGBA").resize((cw, ch), Image.BILINEAR).rotate(-4, resample=Image.BICUBIC, expand=True)
+    bg.paste(nb, (W_ - cw // 2 - 20, 260), nb)                # angeschnitten am rechten Rand
+    c = card_img.convert("RGBA").resize((cw, ch), Image.BILINEAR).rotate(6, resample=Image.BICUBIC, expand=True)
+    cx, cy = 680, 610
+    shadow = Image.new("RGBA", c.size, (0, 0, 0, 0))
+    shadow.putalpha(c.getchannel("A").point(lambda v: v * 6 // 10))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(7))
+    bg.paste(shadow, (cx - c.width // 2 + 8, cy - c.height // 2 + 10), shadow)
+    bg.paste(c, (cx - c.width // 2, cy - c.height // 2), c)
+    bg.save(out_dir / "photo-card.jpg", format="JPEG", quality=90)
+    wood_photo_background(W_, H_, seed=7777).save(out_dir / "photo-nocard.jpg", format="JPEG", quality=90)
 
 
 def main() -> int:
@@ -110,8 +181,11 @@ def main() -> int:
     doc = {"generatedAt": "2026-10-26T06:00:00Z", "sample": True, "algo": arthash.ALGO,
            "region": list(arthash.REGION), "hashes": hashes}
     (SAMPLE / "hashes.json").write_text(json.dumps(doc, indent=1) + "\n", encoding="utf-8")
-    write_y4m(SAMPLE / "camera.y4m", img_dir / f"{CAMERA_CARD}.png")
-    print(f"{len(hashes)} Sample-Hashes, Kamera-Testbild: Produkt {CAMERA_CARD}")
+    write_y4m(SAMPLE / "camera.y4m", Image.open(img_dir / f"{CAMERA_CARD}.png"))
+    write_y4m_offset(SAMPLE / "camera-offset.y4m", Image.open(img_dir / f"{CAMERA_OFFSET_CARD}.png"))
+    write_y4m(SAMPLE / "camera-unknown.y4m", Image.frombytes("RGB", (W, H), card_pixels(UNKNOWN_ART)))
+    write_photos(SAMPLE, Image.open(img_dir / f"{CAMERA_CARD}.png"), Image.open(img_dir / "900001.png"))
+    print(f"{len(hashes)} Sample-Hashes, Kamera-Testbilder: Produkte {CAMERA_CARD} und {CAMERA_OFFSET_CARD} (versetzt, gedreht)")
     return 0
 
 

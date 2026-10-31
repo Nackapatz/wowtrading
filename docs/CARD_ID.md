@@ -97,8 +97,8 @@ Punkte je Kandidat:
 | Set + Nummer mit Ziffernkorrektur (eine Ziffer 5↔6, 1↔7, 0↔8) | 40 |
 | Gesamtzahl passt | +10 |
 | je übereinstimmender Wert (Kosten nicht bei Helden; Angriff/Leben nur bei Verbündeten) | +10 |
-| je widersprechender Wert | −30 |
-| Bildtreffer (Distanz d ≤ Toleranz) | + max(0, 30 − d/3) |
+| je widersprechender Wert | −30 (Kosten −15) |
+| Bildtreffer (Distanz d ≤ Toleranz) | bester: +30 bei Abstand ≥ 8, sonst +10; weitere: + max(0, 10 − (d − bestes d)) |
 | gelernter deutscher Name | +40 |
 | englischer Name ≥ 0,8 | +20 |
 
@@ -108,7 +108,7 @@ Gelernter Name + drei passende Werte = 70.
 
 Erfassen bei ≥ 70 Punkten und ≥ 20 Vorsprung vor dem nächsten anderen Kandidaten, in 2 Frames
 hintereinander. Zusätzlich (Verhalten aus `IMAGE_MATCH.md`): ein eindeutiger Bildtreffer (d ≤ Toleranz,
-Abstand zur nächsten Illustration ≥ 12, nur ein Druck bzw. nur Varianten derselben Karte) erfasst auch
+Abstand zur nächsten Illustration ≥ 8, nur ein Druck bzw. nur Varianten derselben Karte) erfasst auch
 ohne OCR, wenn kein Wert widerspricht und der Kandidat allein vorne liegt. Sonst Vorschläge (Top 3).
 Nach jeder bestätigten Erfassung wird `nameDe → k` gelernt.
 
