@@ -287,6 +287,27 @@ def test_v2_output_does_not_depend_on_product_order(db):
     assert by_k(a[1]) == by_k(b[1]) and a[2] == b[2]
 
 
+def test_v2_links_spelling_variant_to_db_card_without_product(db):
+    # TCGplayer „Najan Spiritbender“, DB „Najan Spiritbinder“: Log 29.10., Karte ohne Set und Nummer gespeichert
+    prods = [product(8, "Falingstar", 100, "Servants of the Betrayer"),
+             product(9, "Falingstar (LOOT)", 100, "Servants of the Betrayer"),
+             product(10, "Roke the Ice Baronn", 100, "Servants of the Betrayer"),   # Roke hat schon ein Produkt
+             product(1, "Roke the Ice Baron", 100, "Servants of the Betrayer")]
+    _, cards, link = carddb.build_cards_v2(db, prods)
+    cards = by_k(cards)
+    assert cards["48-2"]["p"] == 8 and cards["48-2"]["n"] == "Fallingstar"
+    assert (cards["p9"]["si"], cards["p9"]["num"]) == (48, 2)
+    assert cards["p10"]["si"] is None and cards["48-153"]["p"] == 1
+    assert link["linked"] == 3
+
+
+def test_spelling_variant_needs_long_similar_names():
+    assert carddb._spelling_variant("najanspiritbender", "najanspiritbinder")
+    assert not carddb._spelling_variant("felorcwarlock", "felorcwarrior")   # 3 Fehler
+    assert not carddb._spelling_variant("bloodfang", "bloodfang")            # gleich: erster Durchgang
+    assert not carddb._spelling_variant("hound", "hounds")                    # zu kurz
+
+
 # ---------------------------------------------------------------------------
 # build_data integration
 # ---------------------------------------------------------------------------
